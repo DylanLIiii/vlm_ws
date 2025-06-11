@@ -1,0 +1,61 @@
+# Multi-architecture Dockerfile supporting both AMD64 and ARM64
+# Use this for building deployment images for edge devices
+
+# Choose base image based on architecture
+FROM 192.168.31.199:8000/library/ros:humble_humble_arm64
+
+# 设置非交互、时区和语言
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    TZ=Asia/Shanghai
+
+COPY sources_arm64.list /etc/apt/sources.list
+
+# Setup ROS2 repository
+RUN rm -f /etc/apt/sources.list.d/ros2-latest.list && \
+    apt update && apt install -y curl && \
+    curl -sSL https://ghfast.top/https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu jammy main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+# 安装开发工具和其他依赖
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget \
+        git \
+        build-essential \
+        python3-pip \
+        python3-colcon-common-extensions \
+        libpython3-dev \
+        lsb-release \
+        ros-humble-common-interfaces \
+        ros-humble-sensor-msgs-py \
+        ros-humble-rosbag2-storage-mcap \
+        ros-humble-foxglove-msgs \
+        ros-humble-cv-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置pip使用清华源和安装Python包
+RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
+    pip install empy==3.3.4 && \
+    pip install colcon-common-extensions && \
+    pip install numpy==1.26.4 && \
+    pip install scipy && \ 
+    pip install httpx && \
+    pip install requests && \
+    pip install opencv-python && \
+    pip install av && \
+    pip install lark
+
+# Setup .bashrc with ROS environment
+RUN echo "source /opt/ros/humble/setup.bash" >> /home/${USER_NAME}/.bashrc && \
+    echo "source /home/heng.li/repo/vlm_ws/install/setup.bash" >> /home/${USER_NAME}/.bashrc && \
+    chown ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.bashrc
+
+# 设置工作目录
+WORKDIR /home/heng.li/repo/vlm_ws
+
+# Architecture-specific optimizations can be added here
+RUN echo "Built for architecture: arm64" > /tmp/build-info.txt
+
+# 设置启动命令
+CMD ["/bin/bash"]

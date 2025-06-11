@@ -1,0 +1,53 @@
+# Docker Compose file for multi-architecture builds
+# Supports both AMD64 (development) and ARM64 (deployment)
+
+services:
+    # Development service (AMD64)
+    develop_vlm:
+        build:
+            context: . 
+            dockerfile: Dockerfile.develop_vlm
+            args:
+                USER_ID: ${UID:-1004}
+                GROUP_ID: ${GID:-1004}
+                USER_NAME: ${USER:-heng.li} 
+            platforms:
+                - linux/amd64
+        container_name: vlm_ws_devcontainer
+        network_mode: host
+        volumes:
+            - ..:/home/heng.li/repo/vlm_ws
+        environment:
+            - ROS_DISTRO=humble
+            - DEBIAN_FRONTEND=noninteractive
+            - HOST_IP=${HOST_IP:-HOST_IP}
+            - PYTHONPATH=/opt/miniconda3/envs/vlm/lib/python3.10/site-packages/
+            - PULSE_SERVER=unix:/tmp/pulse-socket
+        working_dir: /home/heng.li/repo/vlm_ws
+        shm_size: 2gb
+        tty: true
+        stdin_open: true
+        command: /bin/bash
+
+    # Multi-architecture service for deployment
+    deploy_vlm:
+        build:
+            context: . 
+            dockerfile: Dockerfile.deploy_vlm
+            platforms:
+                - linux/arm64
+        container_name: vlm_ws_deploy
+        network_mode: host
+        volumes:
+            - ..:/vlm_ws
+        environment:
+            - ROS_DISTRO=humble
+            - DEBIAN_FRONTEND=noninteractive
+            - HOST_IP=${HOST_IP:-HOST_IP}
+            - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
+            - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+        working_dir: /vlm_ws
+        shm_size: 2gb
+        tty: true
+        stdin_open: true
+        command: /bin/bash

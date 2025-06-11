@@ -1,6 +1,7 @@
 default: 
     @just --list 
 
+# Development commands (AMD64)
 develop_vlm: 
     docker compose run --rm develop_vlm
 
@@ -13,6 +14,68 @@ develop_vlm_down:
 get_into_vlm:
     docker compose exec develop_vlm bash
 
+# Multi-architecture deployment commands
+setup_buildx:
+    docker buildx create --name multiarch --driver docker-container --use || true
+    docker buildx inspect --bootstrap
+
+# Build multi-architecture image for deployment
+build_multiarch IMAGE_NAME="vlm_ws" TAG="latest":
+    docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --build-arg USER_ID={{`id -u`}} \
+        --build-arg GROUP_ID={{`id -g`}} \
+        --build-arg USER_NAME={{env_var('USER')}} \
+        -f Dockerfile.multi-arch \
+        -t {{IMAGE_NAME}}:{{TAG}} \
+        --push \
+        .
+
+# Build ARM64 only for edge deployment
+build_arm64 IMAGE_NAME="vlm_ws" TAG="arm64":
+    docker buildx build \
+        --platform linux/arm64 \
+        --build-arg USER_ID={{`id -u`}} \
+        --build-arg GROUP_ID={{`id -g`}} \
+        --build-arg USER_NAME={{env_var('USER')}} \
+        -f Dockerfile.multi-arch \
+        -t {{IMAGE_NAME}}:{{TAG}} \
+        --push \
+        .
+
+# Build AMD64 only for development
+build_amd64 IMAGE_NAME="vlm_ws" TAG="amd64":
+    docker buildx build \
+        --platform linux/amd64 \
+        --build-arg USER_ID={{`id -u`}} \
+        --build-arg GROUP_ID={{`id -g`}} \
+        --build-arg USER_NAME={{env_var('USER')}} \
+        -f Dockerfile.multi-arch \
+        -t {{IMAGE_NAME}}:{{TAG}} \
+        --push \
+        .
+
+# Run deployment container (multi-arch)
+deploy_vlm: 
+    docker compose -f compose.multi-arch.yml run --rm deploy_vlm
+
+deploy_vlm_up:
+    docker compose -f compose.multi-arch.yml up -d deploy_vlm
+
+deploy_vlm_down:
+    docker compose -f compose.multi-arch.yml down
+
+get_into_deploy:
+    docker compose -f compose.multi-arch.yml exec deploy_vlm bash
+
 # 保存当前运行中的容器为镜像
 commit_vlm IMAGE="my_custom_vlm_image:latest":
     docker commit vlm_develop {{IMAGE}}
+
+# Show current Docker buildx builders
+show_builders:
+    docker buildx ls
+
+# Inspect multi-arch image
+inspect_image IMAGE_NAME="vlm_ws" TAG="latest":
+    docker buildx imagetools inspect {{IMAGE_NAME}}:{{TAG}}
