@@ -1,0 +1,26 @@
+services:
+    develop_vlm:
+        build:
+            context: . 
+            dockerfile: Dockerfile.develop_vlm
+            args:
+                USER_ID: ${UID:-1004}
+                GROUP_ID: ${GID:-1004}
+                USER_NAME: ${USER:-heng.li} 
+        container_name: vlm_ws_devcontainer
+        network_mode: host
+        volumes:
+            - ..:/home/heng.li/repo/vlm_ws
+            - /mnt/data2/yueyu.wang/data/20250527:/home/heng.li/repo/vlm_ws/src/vita_agent/data
+        environment:
+            - ROS_DISTRO=humble
+            - DEBIAN_FRONTEND=noninteractive
+            - HOST_IP=${HOST_IP:-HOST_IP}
+            # 设置Python路径
+            - PYTHONPATH=/opt/miniconda3/envs/vlm/lib/python3.10/site-packages/
+            - PULSE_SERVER=unix:/tmp/pulse-socket
+        working_dir: /home/heng.li/repo/vlm_ws
+        shm_size: 2gb
+        tty: true
+        stdin_open: true
+        command: /bin/bash

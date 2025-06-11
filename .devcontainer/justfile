@@ -1,0 +1,18 @@
+default: 
+    @just --list 
+
+develop_vlm: 
+    docker compose run --rm develop_vlm
+
+develop_vlm_up:
+    docker compose up -d develop_vlm
+
+develop_vlm_down:
+    docker compose down
+
+get_into_vlm:
+    docker compose exec develop_vlm bash
+
+# 保存当前运行中的容器为镜像
+commit_vlm IMAGE="my_custom_vlm_image:latest":
+    docker commit vlm_develop {{IMAGE}}
