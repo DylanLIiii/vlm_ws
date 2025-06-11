@@ -35,9 +35,6 @@ build_multiarch IMAGE_NAME="vlm_ws" TAG="latest":
 build_arm64 IMAGE_NAME="vlm_ws" TAG="arm64":
     docker buildx build \
         --platform linux/arm64 \
-        --build-arg USER_ID={{`id -u`}} \
-        --build-arg GROUP_ID={{`id -g`}} \
-        --build-arg USER_NAME={{env_var('USER')}} \
         -f Dockerfile.multi-arch \
         -t {{IMAGE_NAME}}:{{TAG}} \
         --push \
