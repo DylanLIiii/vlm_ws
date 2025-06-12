@@ -71,7 +71,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('topic_uwb', '/uwb/data')
         self.declare_parameter('topic_vel_cmd', '/vel_cmd')
         self.declare_parameter('topic_text_command', '/test/command')
-        self.declare_parameter('topic_video', '/image_right_raw/h264_full')
+        self.declare_parameter('topic_video', '/image_right_raw/h264_half')
         self.declare_parameter('topic_odom', '/rt/odom')
         self.declare_parameter('pc_range', [-5.0, -5.0, -0.1, 5.0, 5.0, 1.2])
         self.declare_parameter('xy_resolution', 0.1)

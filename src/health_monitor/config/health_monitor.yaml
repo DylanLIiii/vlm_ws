@@ -1,0 +1,10 @@
+health_monitor_node:
+  ros__parameters:
+    topic_timeout_s: 5.0
+    topics_to_monitor:
+      - /lidar/scan       # Placeholder for Lidar
+      - /uwb/location     # Placeholder for UWB
+      - /camera/image_raw # Placeholder for Camera
+      - /odom             # Placeholder for Odom
+      - /state_machine    # Placeholder for State Machine
+      - /cmd_vel          # Placeholder for Low Command
