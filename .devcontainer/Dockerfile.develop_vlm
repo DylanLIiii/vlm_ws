@@ -14,17 +14,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 复制清华源配置文件
 COPY sources.list /etc/apt/sources.list
 
-RUN rm /etc/apt/sources.list.d/ros2-latest.list && \
-    apt update && apt install curl && \
-    curl -sSL https://ghfast.top/https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu jammy main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+# RUN rm /etc/apt/sources.list.d/ros2-latest.list && \
+#     apt update && apt install curl && \
+#     curl -sSL https://ghfast.top/https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+#     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu jammy main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
 # 安装开发工具和其他依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        curl \
         wget \
         git \
-        build-essential \
         python3-pip \
         python3-colcon-common-extensions \
         python3-rosdep \

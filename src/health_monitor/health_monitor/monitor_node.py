@@ -16,16 +16,24 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import LaserScan, Image
+from sensor_msgs.msg import PointCloud2, Joy
 from std_msgs.msg import String
+from uwb_location.msg import UWB
+from foxglove_msgs.msg import CompressedVideo
+from nav_msgs.msg import Odometry
+# Attempt to import LowState and LowCmd, will fail if lowlevel_msg is not found
+# but the structure is what the user requested.
+# from lowlevel_msg.msg import LowState, LowCmd
 
 # A mapping from topic name to message type.
 # In a real-world scenario, this could be discovered dynamically
 # or configured more robustly.
 TOPIC_TYPE_MAP = {
-    '/scan': LaserScan,
-    '/image_raw': Image,
-    '/chatter': String,
+    "/lidar_points": PointCloud2,
+    "/uwb/data": UWB,
+    "/image_right_raw/h264_half": CompressedVideo,
+    "/rt/odom": Odometry,
+    "/joy": Joy,
 }
 
 class HealthMonitorNode(Node):
