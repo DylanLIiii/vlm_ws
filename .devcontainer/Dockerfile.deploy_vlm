@@ -2,7 +2,7 @@
 # Use this for building deployment images for edge devices
 
 # Choose base image based on architecture
-FROM 192.168.31.199:8000/library/ros:humble_humble_arm64
+FROM 192.168.31.199:8000/library/ros:humble_arm64
 
 # 设置非交互、时区和语言
 ENV DEBIAN_FRONTEND=noninteractive \
