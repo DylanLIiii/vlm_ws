@@ -26,7 +26,6 @@ RUN apt-get update && \
         python3-pip \
         python3-colcon-common-extensions \
         libpython3-dev \
-        lsb-release \
         ros-humble-common-interfaces \
         ros-humble-sensor-msgs-py \
         ros-humble-rosbag2-storage-mcap \
@@ -47,9 +46,8 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
     pip install lark
 
 # Setup .bashrc with ROS environment
-RUN echo "source /opt/ros/humble/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    echo "source /home/heng.li/repo/vlm_ws/install/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    chown ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
+    echo "source /root/vlm_ws/install/setup.bash" >> /root/.bashrc
 
 # 设置工作目录
 WORKDIR /home/heng.li/repo/vlm_ws

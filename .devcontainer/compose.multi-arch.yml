@@ -39,7 +39,9 @@ services:
         container_name: vlm_ws_deploy
         network_mode: host
         volumes:
+        # The fastrtps_profile.xml file is used to configure Fast RTPS settings. It ensures that the ROS 2 nodes can communicate properly over the network.
             - ..:/vlm_ws
+            - /root/fastrtps_profile.xml:/root/fastrtps_profile.xml
         environment:
             - ROS_DISTRO=humble
             - DEBIAN_FRONTEND=noninteractive
