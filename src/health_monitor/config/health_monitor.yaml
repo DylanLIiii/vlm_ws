@@ -2,10 +2,10 @@ health_monitor_node:
   ros__parameters:
     topic_timeout_s: 5.0
     topics_to_monitor:
-      - /lidar_points      # Placeholder for Lidar
-      - /uwb/data     # Placeholder for UWB
-      - /image_right_raw/h264_half # Placeholder for Camera
-      - /rt/odom            # Placeholder for Odom
-      - /rt/lowstate    # Placeholder for State Machine
-      - /rl_lowcmd # Placeholder for Low Command from rl model
-      - /joy # Placeholder for Joy
+      - {name: "/lidar_points", baseline_hz: 10.0, tolerable_fluctuation_pct: 20.0}      # Lidar
+      - {name: "/uwb/data", baseline_hz: 5.0, tolerable_fluctuation_pct: 20.0}     # UWB
+      - {name: "/image_right_raw/h264_half", baseline_hz: 30.0, tolerable_fluctuation_pct: 10.0} # Camera
+      - {name: "/rt/odom", baseline_hz: 50.0, tolerable_fluctuation_pct: 10.0}            # Odom
+      - {name: "/rt/lowstate", baseline_hz: 100.0, tolerable_fluctuation_pct: 10.0}    # State Machine
+      - {name: "/rl_lowcmd", baseline_hz: 100.0, tolerable_fluctuation_pct: 10.0} # Low Command from rl model
+      - {name: "/joy", baseline_hz: 10.0, tolerable_fluctuation_pct: 50.0} # Joy
