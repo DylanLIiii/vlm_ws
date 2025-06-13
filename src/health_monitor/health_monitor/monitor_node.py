@@ -44,7 +44,7 @@ class HealthMonitorNode(Node):
         super().__init__('health_monitor_node')
 
         self.declare_parameter('topics_to_monitor', ['/scan', '/image_raw'])
-        self.declare_parameter('topic_timeout_s', 5.0)
+        self.declare_parameter('topic_timeout_s', 10.0)
 
         self.topics_to_monitor = self.get_parameter('topics_to_monitor').get_parameter_value().string_array_value
         self.topic_timeout_s = self.get_parameter('topic_timeout_s').get_parameter_value().double_value
