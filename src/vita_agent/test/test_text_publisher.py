@@ -38,8 +38,9 @@ class TestTextPublisher(unittest.TestCase):
             # Verify node initialization
             mock_node_init.assert_called_once_with('text_publisher')
             
-            # Verify publisher creation
-            mock_create_pub.assert_called_once_with(Mock, '/test/command', 10)
+            # Verify publisher creation - check the actual String message type
+            from std_msgs.msg import String
+            mock_create_pub.assert_called_once_with(String, '/test/command', 10)
             
             # Verify thread setup
             self.mock_threading.assert_called_once()

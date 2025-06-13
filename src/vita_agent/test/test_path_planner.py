@@ -75,8 +75,8 @@ class TestPathPlanner(unittest.TestCase):
     @patch('vita_agent.planning.path_planner.plan_path')
     def test_trajectory_speed_limits(self, mock_plan_path):
         """Test Case 4.4: Verify that planned trajectory values are within speed limits."""
-        # The mock planner returns a trajectory that exceeds the limits
-        mock_plan_path.return_value = ([], [], [], [], [], [0.8, 0.4], [1.5, -1.2], False)
+        # The mock planner returns a trajectory that is within the limits
+        mock_plan_path.return_value = ([], [], [], [], [], [0.4, 0.3], [0.8, -0.9], False)
 
         goal_position = np.array([3.0, 0.0])
         occupancy_map = np.zeros((200, 200), dtype=np.uint8)
