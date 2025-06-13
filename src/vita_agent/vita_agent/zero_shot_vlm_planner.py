@@ -11,6 +11,7 @@ import asyncio
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 
 from std_msgs.msg import String, UInt8MultiArray
 from sensor_msgs.msg import Image
@@ -42,6 +43,7 @@ from vita_agent.utils.h264_utils import H264DecoderContext
 
 from vita_agent.clients.vlm_client import VlmClient
 from vita_agent.processors.sensor_processor import SensorProcessor
+from vita_agent.processors.asr_processor import ASRProcessor
 from vita_agent.planning.path_planner import PathPlanner
 from vita_agent.motion.motion_controller import MotionController
 
@@ -70,7 +72,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('topic_lidar', '/lidar_points')
         self.declare_parameter('topic_uwb', '/uwb/data')
         self.declare_parameter('topic_vel_cmd', '/vel_cmd')
-        self.declare_parameter('topic_text_command', '/test/command')
+        self.declare_parameter('topic_text_command', '/asr_command')
         self.declare_parameter('topic_video', '/image_right_raw/h264_half')
         self.declare_parameter('topic_odom', '/rt/odom')
         self.declare_parameter('pc_range', [-5.0, -5.0, -0.1, 5.0, 5.0, 1.2])
@@ -91,6 +93,7 @@ class TaskLogicNode(Node):
         self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
  
         self.sensor_processor = SensorProcessor(self)
+        self.asr_processor = ASRProcessor(self)
 
         self.occ_map_dimension = int((self.pc_range[3] - self.pc_range[0]) / self.xy_resolution)
         self.point_cloud_sub = self.create_subscription(
@@ -187,9 +190,24 @@ class TaskLogicNode(Node):
         """Callback for text commands from /test/command topic"""
         if text_msg and text_msg.data:
             if self.state == self.State.IDLE:
-                self.text_data = text_msg.data
-                self.state = self.State.WAITING_FOR_VLM
-                self.get_logger().info(f"Text command received: '{self.text_data}'. Transitioning to WAITING_FOR_VLM.")
+                input_text = text_msg.data
+                
+                # Check if the input is an ASR command
+                if self.asr_processor.is_asr_command(input_text):
+                    # Process ASR command and get VLM prompt
+                    vlm_prompt = self.asr_processor.process_asr_command(input_text)
+                    if vlm_prompt:
+                        self.text_data = vlm_prompt
+                        self.state = self.State.WAITING_FOR_VLM
+                        self.get_logger().info(f"ASR command '{input_text}' processed to VLM prompt: '{vlm_prompt}'. Transitioning to WAITING_FOR_VLM.")
+                    else:
+                        self.get_logger().error(f"Failed to process ASR command: '{input_text}'")
+                else:
+                    # Process as general ASR result
+                    processed_text = self.asr_processor.process_asr_result(input_text)
+                    self.text_data = processed_text
+                    self.state = self.State.WAITING_FOR_VLM
+                    self.get_logger().info(f"ASR result '{input_text}' processed to: '{processed_text}'. Transitioning to WAITING_FOR_VLM.")
             else:
                 self.get_logger().warn(f"Ignoring text command '{text_msg.data}' while in state {self.state.name}")
 
@@ -232,11 +250,7 @@ class TaskLogicNode(Node):
                 return
             
             # Apply fisheye correction if available
-            if hasattr(self, 'corrector_func') and self.corrector_func is not None:
-                cv_image = self.corrector_func(cv_image)
-                if cv_image is None:
-                    self.get_logger().warn('Fisheye correction resulted in None.')
-                    return
+            # Note: corrector_func not implemented in this version
             
             # Convert from BGR to RGB for consistency with previous implementation
             self.rgb = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
@@ -310,7 +324,11 @@ class TaskLogicNode(Node):
                 return
 
             tracking_position = [self.action_target_position[0], self.action_target_position[1], 0, 1]
-            tracking_position = self.sensor_processor.Tr_init2ego @ tracking_position
+            if self.sensor_processor.Tr_init2ego is not None:
+                tracking_position = self.sensor_processor.Tr_init2ego @ tracking_position
+            else:
+                self.get_logger().warn("Tr_init2ego is None, using raw tracking position")
+                tracking_position = np.array(tracking_position)
             
             self.get_logger().info(f"Current tracking position: {tracking_position[:2]}")
 
@@ -347,7 +365,7 @@ def main(args=None):
     node = TaskLogicNode()
 
     # rclpy.spin(node)
-    executor = rclpy.executors.MultiThreadedExecutor()
+    executor = MultiThreadedExecutor()
     executor.add_node(node)
     executor.spin()
 
