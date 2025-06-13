@@ -18,7 +18,17 @@ class SensorProcessor:
         self.xyz = None
 
     def process_odom(self, odom_msg):
+        # Check if odom message is None
+        if odom_msg is None:
+            self.logger.warning("Received None odom message")
+            return
+        
         xyz = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, 0, 1])
+        
+        # Check if x, y coordinates are zero
+        if xyz[0] == 0 and xyz[1] == 0:
+            self.logger.warning("Odom x and y coordinates are both zero")
+        
         self.logger.info(f"--------------------------- Odom xyz: {xyz}")
         odom_orientation = np.array([
             odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y,

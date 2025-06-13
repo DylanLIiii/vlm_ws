@@ -20,15 +20,24 @@ class MotionController:
         self.vyaw = 0.0  # [0.0] * self.queue_size
     
     def publish_velocity(self):
-        if self.node.last_uwb_time is None or self.node.last_pc_time is None:
-            self.logger.warn(f"Timeout, UWB: {self.node.last_uwb_time}, Lidar: {self.node.last_pc_time}. Halting velocity publication.")
+        # Check if straight-line planning is enabled
+        use_straight_line = hasattr(self.node, 'use_straight_line_planning') and self.node.use_straight_line_planning
+        
+        # Always check UWB timeout, but only check PC timeout if not using straight-line planning
+        if self.node.last_uwb_time is None:
+            self.logger.warn(f"UWB timeout: {self.node.last_uwb_time}. Halting velocity publication.")
+            return
+            
+        if not use_straight_line and self.node.last_pc_time is None:
+            self.logger.warn(f"Point cloud timeout: {self.node.last_pc_time}. Halting velocity publication.")
             return
 
         if time.time() - self.node.last_uwb_time > self.node.uwb_timeout:
             self.logger.warn("UWB timeout, stopping robot")
             self.stop()
 
-        if time.time() - self.node.last_pc_time > self.node.pc_timeout:
+        # Only check point cloud timeout when not using straight-line planning
+        if not use_straight_line and time.time() - self.node.last_pc_time > self.node.pc_timeout:
             self.logger.warn("Point cloud timeout, stopping robot")
             self.stop()
 

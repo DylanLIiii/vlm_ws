@@ -6,5 +6,7 @@ This workspace is aiming to support everything about vlm usage. The core repo is
 
 You should always following the Best Practices Of Developing ROS2 Python Package in this workspace.
 
+You should always use python3
+
 - For best practice, follow best_practice.md 
 - For sensors information, following sensors.md

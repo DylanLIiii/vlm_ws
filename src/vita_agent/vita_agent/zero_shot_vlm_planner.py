@@ -80,6 +80,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('pc_timeout', 20.0)
         self.declare_parameter('max_linear_speed', 1.0)
         self.declare_parameter('max_angular_speed', 0.7)
+        self.declare_parameter('use_straight_line_planning', False)
  
         self.vlm_server_url = self.get_parameter('vlm_server_url').get_parameter_value().string_value
         self.pc_range = self.get_parameter('pc_range').get_parameter_value().double_array_value
@@ -89,6 +90,7 @@ class TaskLogicNode(Node):
         self.pc_timeout = self.get_parameter('pc_timeout').get_parameter_value().double_value
         self.max_linear_speed = self.get_parameter('max_linear_speed').get_parameter_value().double_value
         self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
+        self.use_straight_line_planning = self.get_parameter('use_straight_line_planning').get_parameter_value().bool_value
  
         self.sensor_processor = SensorProcessor(self)
 
@@ -261,7 +263,15 @@ class TaskLogicNode(Node):
             self.get_logger().info("Waiting for UWB data...")
             return
 
-        occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
+        # Check if we're using straight-line planning
+        use_straight_line = self.use_straight_line_planning
+        
+        # Only process point cloud if we need it for obstacle avoidance
+        if use_straight_line:
+            self.get_logger().debug("Straight-line planning enabled - skipping point cloud processing")
+            occupancy_map_local = None  # Not needed for straight-line planning
+        else:
+            occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
 
         if self.state == self.State.WAITING_FOR_VLM:
             self.get_logger().info("State: WAITING_FOR_VLM. Checking for prerequisites...")

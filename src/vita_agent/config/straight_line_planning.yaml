@@ -1,0 +1,29 @@
+# Example configuration for straight-line path planning
+task_logic_node:
+  ros__parameters:
+    # Straight-line planning feature
+    use_straight_line_planning: true
+    
+    # VLM server configuration
+    vlm_server_url: 'http://192.168.31.21:8000/process_spatial_data/'
+    
+    # Topic configurations
+    topic_lidar: '/lidar_points'
+    topic_uwb: '/uwb/data'
+    topic_vel_cmd: '/vel_cmd'
+    topic_text_command: '/test/command'
+    topic_video: '/image_right_raw/h264_half'
+    topic_odom: '/rt/odom'
+    
+    # Point cloud processing (still used for other purposes)
+    pc_range: [-5.0, -5.0, -0.1, 5.0, 5.0, 1.2]
+    xy_resolution: 0.1
+    
+    # Movement parameters (apply to both planning modes)
+    stop_distance: 1.2
+    max_linear_speed: 0.8  # Reduced for safer straight-line movement
+    max_angular_speed: 0.5  # Reduced for smoother turns
+    
+    # Timeout parameters
+    uwb_timeout: 30.0
+    pc_timeout: 20.0
