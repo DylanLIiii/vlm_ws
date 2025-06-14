@@ -1,11 +1,10 @@
-import time
 import numpy as np
 import rclpy.node
 from geometry_msgs.msg import Twist
 
 
 class MotionController:
-    def __init__(self, node: rclpy.node.Node):
+    def __init__(self, node: rclpy.node.Node, callback_group=None):
         self.node = node
         self.logger = node.get_logger()
         # Velocity command
@@ -14,36 +13,40 @@ class MotionController:
         )
 
         # Set a timer for publishing velocity command msg
-        self.vel_cmd_timer = self.node.create_timer(0.1, self.publish_velocity)
+        self.vel_cmd_timer = self.node.create_timer(0.5, self.publish_velocity, callback_group=callback_group)
 
         self.vx = 0.0  # [0.0] * self.queue_size
         self.vyaw = 0.0  # [0.0] * self.queue_size
     
     def publish_velocity(self):
-        if self.node.last_uwb_time is None or self.node.last_pc_time is None:
-            self.logger.warn(f"Timeout, UWB: {self.node.last_uwb_time}, Lidar: {self.node.last_pc_time}. Halting velocity publication.")
-            return
+        """Publish velocity commands with safety limits"""
+        # Check if the main node has determined it's safe to move
+        if hasattr(self.node, 'check_safety_conditions'):
+            if not self.node.check_safety_conditions():
+                # Safety conditions not met - stop the robot
+                self.stop()
+                return
+        
+        # Apply safety limits to prevent excessive speeds
+        if self.vx > self.node.max_linear_speed:
+            self.vx = self.node.max_linear_speed
 
-        if time.time() - self.node.last_uwb_time > self.node.uwb_timeout:
-            self.logger.warn("UWB timeout, stopping robot")
-            self.stop()
-
-        if time.time() - self.node.last_pc_time > self.node.pc_timeout:
-            self.logger.warn("Point cloud timeout, stopping robot")
-            self.stop()
-
-        if self.vx > 0.8:
-            self.vx = 0.8
-
-        if abs(self.vyaw) > 0.75:
-            self.vyaw = np.sign(self.vyaw) * 0.75
+        if abs(self.vyaw) > self.node.max_angular_speed:
+            self.vyaw = np.sign(self.vyaw) * self.node.max_angular_speed
 
         msg = Twist()
         msg.linear.x = self.vx
-        msg.angular.z = self.vyaw * 0.4
+        msg.angular.z = self.vyaw * 0.4  # Apply angular velocity scaling factor
 
         self.vel_cmd_publisher.publish(msg)
-        self.logger.info(f'Publishing velocity: linear.x={msg.linear.x}, angular.z={msg.angular.z}')
+        
+        # Log velocity commands periodically (every 50 messages to avoid spam)
+        if not hasattr(self, '_publish_count'):
+            self._publish_count = 0
+        self._publish_count += 1
+        
+        if self._publish_count % 10 == 1 or (abs(self.vx) > 0.1 or abs(self.vyaw) > 0.1):
+            self.logger.info(f'Publishing velocity: linear.x={msg.linear.x:.3f}, angular.z={msg.angular.z:.3f}')
 
     def go_back(self):
         self.logger.info("Collision detected, moving back.")
@@ -51,9 +54,10 @@ class MotionController:
         self.vyaw = 0.0
 
     def stop(self):
-        """完全停止"""
+        """Stop the robot completely"""
         self.vx = 0.0
         self.vyaw = 0.0
+        self.logger.info("Robot stopped")
 
     def move_to_target(self, p_xyz_vcs, v_traj, w_traj):
         distance = np.hypot(p_xyz_vcs[0], p_xyz_vcs[1])

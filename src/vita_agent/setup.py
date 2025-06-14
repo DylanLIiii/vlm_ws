@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'person_follower = vita_agent.zero_shot_vlm_planner:main',
             'text_publisher = vita_agent.text_publisher:main',
+            'test_odom = vita_agent.just_test_odom:main',
         ],
     },
 )
