@@ -128,6 +128,7 @@ if __name__ == "__main__":
 
 - Include tests (unit, lint) in `test/` directory, e.g., pytest, flake8, pep257 :contentReference[oaicite:39]{index=39}.
 - Run tests via `colcon test` in CI pipeline.
+- You should use pytest to test.
 
 ---
 
