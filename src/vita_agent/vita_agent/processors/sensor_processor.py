@@ -1,4 +1,5 @@
 import numpy as np
+import time
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
 
@@ -16,29 +17,85 @@ class SensorProcessor:
         self.Tr_ego2init = None
         self.Tr_init2ego = None
         self.xyz = None
+        
+        # Add odometry timeout tracking
+        self.last_odom_time = None
+        self.odom_timeout = node.get_parameter('odom_timeout').get_parameter_value().double_value
+        self.odom_message_count = 0
 
     def process_odom(self, odom_msg):
-        xyz = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, 0, 1])
-        self.logger.info(f"--------------------------- Odom xyz: {xyz}")
-        odom_orientation = np.array([
-            odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y,
-            odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w
-        ])
-        # These lines convert the quaternion to a rotation matrix
-        # and then create a transformation matrix from the ego frame to the world frame.
-        if len(odom_orientation) != 4:
-            self.logger.error("Invalid odom orientation length, expected 4 elements.")
-            return
-        rotation_matrix = R.from_quat(odom_orientation).as_matrix()
-        Tr_ego2world = np.eye(4)
-        Tr_ego2world[:3, :3] = rotation_matrix
-        Tr_ego2world[:3, 3] = xyz[:3]
+        """Process odometry message with timeout tracking and validation"""
+        current_time = time.time()
+        self.last_odom_time = current_time
+        self.odom_message_count += 1
+        
+        # Log odometry reception status periodically
+        if self.odom_message_count % 50 == 1:  # Log every 50th message to avoid spam
+            self.logger.info(f"Odometry callback active - message count: {self.odom_message_count}")
+        
+        try:
+            xyz = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, 0, 1])
+            
+            # Log detailed position info for first few messages or periodically
+            if self.odom_message_count <= 5 or self.odom_message_count % 100 == 0:
+                self.logger.info(f"Odom xyz: {xyz[:3]} (message #{self.odom_message_count})")
+            
+            odom_orientation = np.array([
+                odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y,
+                odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w
+            ])
+            
+            # These lines convert the quaternion to a rotation matrix
+            # and then create a transformation matrix from the ego frame to the world frame.
+            if len(odom_orientation) != 4:
+                self.logger.error("Invalid odom orientation length, expected 4 elements.")
+                return
+                
+            # Validate quaternion (should have unit length)
+            quat_norm = np.linalg.norm(odom_orientation)
+            if abs(quat_norm - 1.0) > 0.1:  # Allow some tolerance
+                self.logger.warn(f"Quaternion not normalized: norm = {quat_norm}")
+            
+            rotation_matrix = R.from_quat(odom_orientation).as_matrix()
+            Tr_ego2world = np.eye(4)
+            Tr_ego2world[:3, :3] = rotation_matrix
+            Tr_ego2world[:3, 3] = xyz[:3]
 
-        if self.Tr_world2init is None:
-            self.Tr_world2init = np.linalg.inv(Tr_ego2world)
-        self.Tr_ego2init = self.Tr_world2init @ Tr_ego2world
-        self.Tr_init2ego = np.linalg.inv(self.Tr_ego2init)
-        self.xyz = self.Tr_world2init @ xyz
+            if self.Tr_world2init is None:
+                self.Tr_world2init = np.linalg.inv(Tr_ego2world)
+                self.logger.info("Initial odometry transform established")
+                
+            self.Tr_ego2init = self.Tr_world2init @ Tr_ego2world
+            self.Tr_init2ego = np.linalg.inv(self.Tr_ego2init)
+            self.xyz = self.Tr_world2init @ xyz
+            
+        except Exception as e:
+            self.logger.error(f"Error processing odometry: {e}")
+
+    def is_odom_data_fresh(self):
+        """Check if odometry data is fresh (within timeout period)"""
+        if self.last_odom_time is None:
+            return False
+        return (time.time() - self.last_odom_time) < self.odom_timeout
+
+    def get_odom_status(self):
+        """Get comprehensive odometry status information"""
+        current_time = time.time()
+        if self.last_odom_time is None:
+            return {
+                'fresh': False,
+                'message_count': self.odom_message_count,
+                'time_since_last': None,
+                'transforms_ready': False
+            }
+        
+        time_since_last = current_time - self.last_odom_time
+        return {
+            'fresh': time_since_last < self.odom_timeout,
+            'message_count': self.odom_message_count,
+            'time_since_last': time_since_last,
+            'transforms_ready': self.Tr_init2ego is not None
+        }
 
     def process_point_cloud(self, point_cloud_msg):
         point_cloud = extract_lidar(point_cloud_msg, self.pc_range)

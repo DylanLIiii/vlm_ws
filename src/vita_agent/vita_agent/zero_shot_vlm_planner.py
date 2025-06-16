@@ -10,7 +10,7 @@ import asyncio
 
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
 from std_msgs.msg import String, UInt8MultiArray
 from sensor_msgs.msg import Image
@@ -78,6 +78,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('stop_distance', 1.2)
         self.declare_parameter('uwb_timeout', 30.0)
         self.declare_parameter('pc_timeout', 20.0)
+        self.declare_parameter('odom_timeout', 5.0)
         self.declare_parameter('max_linear_speed', 1.0)
         self.declare_parameter('max_angular_speed', 0.7)
  
@@ -87,21 +88,23 @@ class TaskLogicNode(Node):
         self.stop_distance = self.get_parameter('stop_distance').get_parameter_value().double_value
         self.uwb_timeout = self.get_parameter('uwb_timeout').get_parameter_value().double_value
         self.pc_timeout = self.get_parameter('pc_timeout').get_parameter_value().double_value
+        self.odom_timeout = self.get_parameter('odom_timeout').get_parameter_value().double_value
         self.max_linear_speed = self.get_parameter('max_linear_speed').get_parameter_value().double_value
         self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
- 
+
         self.sensor_processor = SensorProcessor(self)
 
         self.occ_map_dimension = int((self.pc_range[3] - self.pc_range[0]) / self.xy_resolution)
+        pc_callback_group = MutuallyExclusiveCallbackGroup()
         self.point_cloud_sub = self.create_subscription(
-            PointCloud2, self.get_parameter('topic_lidar').get_parameter_value().string_value, self.pc_callback, 1
+            PointCloud2, self.get_parameter('topic_lidar').get_parameter_value().string_value, self.pc_callback, 1, #callback_group=pc_callback_group
         )
         self.get_logger().info("Point cloud subscriber node started")
  
         # UWB
         self.uwb_target = np.zeros(4)
         self.uwb_sub = self.create_subscription(
-             UWB, self.get_parameter('topic_uwb').get_parameter_value().string_value, self.uwb_callback, 1,
+             UWB, self.get_parameter('topic_uwb').get_parameter_value().string_value, self.uwb_callback, 1, #callback_group=self.sensor_group
         )
         self.get_logger().info("UWB subscriber node started")
  
@@ -117,12 +120,13 @@ class TaskLogicNode(Node):
         # Control
         self.stop_flag = False
  
-        self.motion_controller = MotionController(self)
+        self.motion_controller = MotionController(self, 
+        #callback_group=self.motion_control_group
+        )
  
         # ASR subscriber
-        self.subscriber_text_group = MutuallyExclusiveCallbackGroup()
         self.text_sub = self.create_subscription(
-            String, self.get_parameter('topic_text_command').get_parameter_value().string_value, self.text_callback, 1, # callback_group=self.subscriber_text_group
+            String, self.get_parameter('topic_text_command').get_parameter_value().string_value, self.text_callback, 1, #callback_group=self.vlm_group
         )
         self.get_logger().info("Text command subscriber node started")
  
@@ -137,29 +141,33 @@ class TaskLogicNode(Node):
         self.frame_count = 0
  
         # CompressedVideo subscriber
-        self.subscriber_video_group = MutuallyExclusiveCallbackGroup()
         self.video_sub = self.create_subscription(
             CompressedVideo,
             self.get_parameter('topic_video').get_parameter_value().string_value,
             self.compressed_video_callback,
             10,
-            #  callback_group=self.subscriber_video_group
+            # callback_group=self.sensor_group
         )
-        self.get_logger().info("CompressedVideo subscriber node started")
- 
+        self.get_logger().info("CompressedVideo subscriber node started")        
         self.rgb = None
         self.depth = None
- 
+        self.latest_odom_msg = None
+
         self.valid_atomic_actions = {
             "Come Here": False,
         }
  
-        # Odom subscriber
-        self.subscriber_odom_group = MutuallyExclusiveCallbackGroup()
+        # Odom subscriber - store latest odom data without immediate processing
+        self.latest_odom_msg = None
         self.odom_sub = self.create_subscription(
-            Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.sensor_processor.process_odom, 1, # callback_group=self.subscriber_odom_group
+            Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.odom_callback, 1, #callback_group=self.sensor_group
         )
         self.get_logger().info("Odom subscriber node started")
+        
+        # Add timer for monitoring sensor health including odometry
+        self.sensor_health_timer = self.create_timer(
+            1.0, self.check_sensor_health, #callback_group=self.timer_group
+        )
 
 
     def destroy_node(self):
@@ -260,8 +268,25 @@ class TaskLogicNode(Node):
         if self.uwb_target.sum() == 0:
             self.get_logger().info("Waiting for UWB data...")
             return
+            
+        # Process latest odometry data when needed for navigation
+        if self.latest_odom_msg is not None:
+            self.sensor_processor.process_odom(self.latest_odom_msg)
+            
+        # Check if transforms are ready
+        if self.sensor_processor.Tr_init2ego is None:
+            self.get_logger().warn("Odometry transforms not yet initialized - waiting for odometry data")
+            return
 
-        occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
+        # For navigation states, check safety conditions
+        if self.state in [self.State.WAITING_FOR_VLM, self.State.EXECUTING_ACTION]:
+            if not self.check_safety_conditions():
+                self.get_logger().warn("Safety conditions not met - stopping navigation")
+                if self.state == self.State.EXECUTING_ACTION:
+                    self.motion_controller.stop()
+                return
+
+        
 
         if self.state == self.State.WAITING_FOR_VLM:
             self.get_logger().info("State: WAITING_FOR_VLM. Checking for prerequisites...")
@@ -329,7 +354,7 @@ class TaskLogicNode(Node):
                 self.text_data = None
                 self.motion_controller.stop()
                 return
-
+            occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
             v_traj, w_traj, stop_flag = self.path_planner.plan_trajectory(tracking_position, occupancy_map_local)
             self.stop_flag = stop_flag
 
@@ -338,9 +363,77 @@ class TaskLogicNode(Node):
             else:
                 self.motion_controller.move_to_target(tracking_position, v_traj, w_traj)
 
+    def check_sensor_health(self):
+        """Periodic health check for all sensors including odometry"""
+        odom_status = self.sensor_processor.get_odom_status()
+        
+        # Log odometry status
+        if not odom_status['fresh']:
+            if odom_status['time_since_last'] is None:
+                self.get_logger().warn("No odometry data received yet!")
+            else:
+                self.get_logger().warn(f"Odometry data stale! Last received {odom_status['time_since_last']:.1f}s ago (timeout: {self.sensor_processor.odom_timeout}s)")
+        else:
+            if odom_status['message_count'] % 100 == 0:  # Log periodically when healthy
+                self.get_logger().info(f"Odometry healthy: {odom_status['message_count']} messages, last {odom_status['time_since_last']:.1f}s ago")
+        
+        # Check other sensors
+        current_time = time.time()
+        
+        if self.last_uwb_time is not None:
+            uwb_age = current_time - self.last_uwb_time
+            if uwb_age > self.uwb_timeout:
+                self.get_logger().warn(f"UWB data stale! Last received {uwb_age:.1f}s ago")
+        else:
+            self.get_logger().warn("No UWB data received yet!")
+            
+        if self.last_pc_time is not None:
+            pc_age = current_time - self.last_pc_time
+            if pc_age > self.pc_timeout:
+                self.get_logger().warn(f"Point cloud data stale! Last received {pc_age:.1f}s ago")
+        else:
+            self.get_logger().warn("No point cloud data received yet!")
 
+    def check_safety_conditions(self):
+        """
+        Centralized safety check for all critical sensors
+        Returns True if it's safe to continue navigation, False otherwise
+        """
+        current_time = time.time()
+        
+        # Check UWB timeout
+        if self.last_uwb_time is None:
+            self.get_logger().warn("No UWB data - cannot navigate safely")
+            return False
+        elif current_time - self.last_uwb_time > self.uwb_timeout:
+            self.get_logger().warn(f"UWB timeout ({current_time - self.last_uwb_time:.1f}s) - stopping robot")
+            return False
+            
+        # Check point cloud timeout
+        if self.last_pc_time is None:
+            self.get_logger().warn("No point cloud data - cannot navigate safely") 
+            return False
+        elif current_time - self.last_pc_time > self.pc_timeout:
+            self.get_logger().warn(f"Point cloud timeout ({current_time - self.last_pc_time:.1f}s) - stopping robot")
+            return False
+            
+        # Check odometry timeout (warn but don't stop)
+        if not self.sensor_processor.is_odom_data_fresh():
+            odom_status = self.sensor_processor.get_odom_status()
+            if odom_status['time_since_last'] is None:
+                self.get_logger().warn("No odometry data - navigation may be unreliable")
+            else:
+                self.get_logger().warn(f"Odometry timeout ({odom_status['time_since_last']:.1f}s) - navigation may be unreliable")
+            # Don't return False for odometry timeout - continue with degraded navigation
+            
+        return True
 
-
+    def odom_callback(self, odom_msg):
+        """Store odometry message and update timing for health monitoring"""
+        self.latest_odom_msg = odom_msg
+        # Update timing information without full processing (high frequency callback)
+        self.sensor_processor.last_odom_time = time.time()
+        self.sensor_processor.odom_message_count += 1
 
 def main(args=None):
     rclpy.init(args=args)
