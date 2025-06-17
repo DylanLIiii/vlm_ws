@@ -126,7 +126,7 @@ class TaskLogicNode(Node):
  
         # ASR subscriber
         self.text_sub = self.create_subscription(
-            String, self.get_parameter('topic_text_command').get_parameter_value().string_value, self.text_callback, 1, #callback_group=self.vlm_group
+            String, self.get_parameter('topic_text_command').get_parameter_value().string_value, self.text_callback, 1, callback_group=self.odom_callback_group
         )
         self.get_logger().info("Text command subscriber node started")
  

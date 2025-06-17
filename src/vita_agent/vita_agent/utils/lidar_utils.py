@@ -14,7 +14,7 @@ def extract_lidar(point_cloud_msg, pc_range):
 
     # Transform the point cloud to the lidar frame
     xyz = np.array([0, 0, 0, 1])  # lidar state
-    rpy = np.array([0, 0, 180])
+    rpy = np.array([0, 0, 0])
     rotation_matrix = Rotation.from_euler('xyz', rpy, degrees=True).as_matrix()
 
     # # Create transformation matrix
