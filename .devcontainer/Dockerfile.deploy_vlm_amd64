@@ -1,21 +1,19 @@
+# Multi-architecture Dockerfile supporting both AMD64 and ARM64
+# Use this for building deployment images for edge devices
 
-# We should conside buildx to build a arm64 image
+# Choose base image based on architecture
 FROM 192.168.31.199:8000/library/ros:humble_amd64
-
-ARG USER_ID
-ARG GROUP_ID
-ARG USER_NAME
 
 # 设置非交互、时区和语言
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     TZ=Asia/Shanghai
 
-# 复制清华源配置文件
-COPY sources.list /etc/apt/sources.list
+COPY sources_amd64.list /etc/apt/sources.list
 
-# RUN rm /etc/apt/sources.list.d/ros2-latest.list && \
-#     apt update && apt install curl && \
+# Setup ROS2 repository
+# RUN rm -f /etc/apt/sources.list.d/ros2-latest.list && \
+#     apt update && apt install -y curl && \
 #     curl -sSL https://ghfast.top/https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
 #     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu jammy main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
@@ -27,30 +25,13 @@ RUN apt-get update && \
         git \
         python3-pip \
         python3-colcon-common-extensions \
-        python3-rosdep \
-        python3-vcstool \
-        python3-setuptools \
         libpython3-dev \
-        lsb-release \
         ros-humble-common-interfaces \
         ros-humble-sensor-msgs-py \
         ros-humble-rosbag2-storage-mcap \
         ros-humble-foxglove-msgs \
         ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
-
-# 创建用户和组
-RUN if [ -z "${USER_ID}" ] || [ -z "${GROUP_ID}" ] || [ -z "${USER_NAME}" ]; then \
-        echo "Error: USER_ID, GROUP_ID, and USER_NAME must be set as build arguments." && exit 1; \
-    fi && \
-    groupadd -g ${GROUP_ID} ${USER_NAME} 2>/dev/null || true && \
-    useradd --create-home --shell /bin/bash -u ${USER_ID} -g ${GROUP_ID} ${USER_NAME} && \
-    echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER_NAME} && \
-    chmod 0440 /etc/sudoers.d/${USER_NAME}
-
-# 切换到新用户
-USER ${USER_NAME}
-WORKDIR /home/${USER_NAME}
 
 # 配置pip使用清华源和安装Python包
 RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
@@ -62,19 +43,15 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
     pip install requests && \
     pip install opencv-python && \
     pip install av && \
-    pip install lark && \
-    pip install pytest-asyncio
+    pip install lark
 
 # Setup .bashrc with ROS environment
-RUN echo "source /opt/ros/humble/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    echo "source /home/heng.li/repo/vlm_ws/install/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    chown ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.bashrc
-
-# 安装x-cmd (as user)
-RUN curl -fsSL https://get.x-cmd.com | bash
-
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && 
 # 设置工作目录
 WORKDIR /home/heng.li/repo/vlm_ws
+
+# Architecture-specific optimizations can be added here
+RUN echo "Built for architecture: amd64" > /tmp/build-info.txt
 
 # 设置启动命令
 CMD ["/bin/bash"]

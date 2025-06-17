@@ -6,7 +6,7 @@ services:
     develop_vlm:
         build:
             context: . 
-            dockerfile: Dockerfile.develop_vlm
+            dockerfile: Dockerfile.develop_vlm_amd64
             args:
                 USER_ID: ${UID:-1004}
                 GROUP_ID: ${GID:-1004}
@@ -33,7 +33,7 @@ services:
     deploy_vlm:
         build:
             context: . 
-            dockerfile: Dockerfile.deploy_vlm
+            dockerfile: Dockerfile.deploy_vlm_arm64
             platforms:
                 - linux/arm64
         container_name: vlm_ws_deploy

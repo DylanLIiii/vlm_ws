@@ -1,8 +1,82 @@
-default: 
-    @just --list 
+default:
+    @just --list
 
+# List available architectures
+list_archs:
+    @echo "Available architectures:"
+    @echo "  amd64     - Development environment (AMD64)"
+    @echo "  arm64     - Deployment environment (ARM64)"
+    @echo "  multiarch - Both architectures (for build commands only)"
+
+# Run VLM container with specified architecture
+run_vlm ARCH:
+    #!/usr/bin/env bash
+    case "{{ARCH}}" in
+        "amd64")
+            echo "Running AMD64 development container..."
+            docker compose -f compose.multi-arch.yml run --rm develop_vlm
+            ;;
+        "arm64")
+            echo "Running ARM64 deployment container..."
+            docker compose -f compose.multi-arch.yml run --rm deploy_vlm
+            ;;
+        *)
+            echo "Error: Invalid architecture '{{ARCH}}'. Use 'amd64' or 'arm64'"
+            echo "Run 'just list_archs' to see available options"
+            exit 1
+            ;;
+    esac
+
+# Start VLM container in background with specified architecture
+start_vlm ARCH:
+    #!/usr/bin/env bash
+    case "{{ARCH}}" in
+        "amd64")
+            echo "Starting AMD64 development container..."
+            docker compose -f compose.multi-arch.yml up -d develop_vlm
+            ;;
+        "arm64")
+            echo "Starting ARM64 deployment container..."
+            docker compose -f compose.multi-arch.yml up -d deploy_vlm
+            ;;
+        *)
+            echo "Error: Invalid architecture '{{ARCH}}'. Use 'amd64' or 'arm64'"
+            echo "Run 'just list_archs' to see available options"
+            exit 1
+            ;;
+    esac
+
+# Stop VLM containers
+stop_vlm:
+    docker compose -f compose.multi-arch.yml down
+
+# Show status of VLM containers
+status_vlm:
+    @echo "VLM Container Status:"
+    @docker compose -f compose.multi-arch.yml ps
+
+# Get into running VLM container with specified architecture
+exec_vlm ARCH:
+    #!/usr/bin/env bash
+    case "{{ARCH}}" in
+        "amd64")
+            echo "Connecting to AMD64 development container..."
+            docker compose -f compose.multi-arch.yml exec develop_vlm bash
+            ;;
+        "arm64")
+            echo "Connecting to ARM64 deployment container..."
+            docker compose -f compose.multi-arch.yml exec deploy_vlm bash
+            ;;
+        *)
+            echo "Error: Invalid architecture '{{ARCH}}'. Use 'amd64' or 'arm64'"
+            echo "Run 'just list_archs' to see available options"
+            exit 1
+            ;;
+    esac
+
+# Legacy commands for backward compatibility
 # Development commands (AMD64)
-develop_vlm: 
+develop_vlm:
     docker compose run --rm develop_vlm
 
 develop_vlm_up:
@@ -19,6 +93,84 @@ setup_buildx:
     docker buildx create --name multiarch --driver docker-container --use || true
     docker buildx inspect --bootstrap
 
+# Build image for specified architecture
+build_vlm ARCH IMAGE_NAME="vlm_ws" TAG="latest":
+    #!/usr/bin/env bash
+    case "{{ARCH}}" in
+        "amd64")
+            echo "Building AMD64 image..."
+            docker buildx build \
+                --platform linux/amd64 \
+                --build-arg USER_ID=$(id -u) \
+                --build-arg GROUP_ID=$(id -g) \
+                --build-arg USER_NAME=$USER \
+                -f Dockerfile.multi-arch \
+                -t {{IMAGE_NAME}}:{{TAG}} \
+                --push \
+                .
+            ;;
+        "arm64")
+            echo "Building ARM64 image..."
+            docker buildx build \
+                --platform linux/arm64 \
+                -f Dockerfile.multi-arch \
+                -t {{IMAGE_NAME}}:{{TAG}} \
+                --push \
+                .
+            ;;
+        "multiarch"|"both")
+            echo "Building multi-architecture image (AMD64 + ARM64)..."
+            docker buildx build \
+                --platform linux/amd64,linux/arm64 \
+                --build-arg USER_ID=$(id -u) \
+                --build-arg GROUP_ID=$(id -g) \
+                --build-arg USER_NAME=$USER \
+                -f Dockerfile.multi-arch \
+                -t {{IMAGE_NAME}}:{{TAG}} \
+                --push \
+                .
+            ;;
+        *)
+            echo "Error: Invalid architecture '{{ARCH}}'. Use 'amd64', 'arm64', or 'multiarch'"
+            echo "Run 'just list_archs' to see available options"
+            exit 1
+            ;;
+    esac
+
+# Build image locally (without push) for specified architecture
+build_vlm_local ARCH IMAGE_NAME="vlm_ws" TAG="latest":
+    #!/usr/bin/env bash
+    case "{{ARCH}}" in
+        "amd64")
+            echo "Building AMD64 image locally..."
+            docker buildx build \
+                --platform linux/amd64 \
+                --build-arg USER_ID=$(id -u) \
+                --build-arg GROUP_ID=$(id -g) \
+                --build-arg USER_NAME=$USER \
+                -f Dockerfile.multi-arch \
+                -t {{IMAGE_NAME}}:{{TAG}} \
+                --load \
+                .
+            ;;
+        "arm64")
+            echo "Building ARM64 image locally..."
+            docker buildx build \
+                --platform linux/arm64 \
+                -f Dockerfile.multi-arch \
+                -t {{IMAGE_NAME}}:{{TAG}} \
+                --load \
+                .
+            ;;
+        *)
+            echo "Error: Invalid architecture '{{ARCH}}'. Use 'amd64' or 'arm64'"
+            echo "Note: Multi-arch builds cannot be loaded locally, use 'build_vlm multiarch' instead"
+            echo "Run 'just list_archs' to see available options"
+            exit 1
+            ;;
+    esac
+
+# Legacy build commands for backward compatibility
 # Build multi-architecture image for deployment
 build_multiarch IMAGE_NAME="vlm_ws" TAG="latest":
     docker buildx build \
@@ -31,6 +183,7 @@ build_multiarch IMAGE_NAME="vlm_ws" TAG="latest":
         --push \
         .
 
+# Legacy build commands - use build_vlm instead
 # Build ARM64 only for edge deployment
 build_arm64 IMAGE_NAME="vlm_ws" TAG="arm64":
     docker buildx build \
@@ -52,8 +205,8 @@ build_amd64 IMAGE_NAME="vlm_ws" TAG="amd64":
         --push \
         .
 
-# Run deployment container (multi-arch)
-deploy_vlm: 
+# Legacy deployment commands (ARM64) - use run_vlm/start_vlm/exec_vlm instead
+deploy_vlm_arm:
     docker compose -f compose.multi-arch.yml run --rm deploy_vlm
 
 deploy_vlm_up:

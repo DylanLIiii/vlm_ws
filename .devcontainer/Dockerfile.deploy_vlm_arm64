@@ -1,4 +1,4 @@
-# Multi-architecture Dockerfile supporting both AMD64 and ARM64
+# Multi-architecture Dockerfile supporting both arm64 and ARM64
 # Use this for building deployment images for edge devices
 
 # Choose base image based on architecture
