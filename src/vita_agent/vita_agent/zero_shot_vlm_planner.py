@@ -77,7 +77,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('xy_resolution', 0.1)
         self.declare_parameter('stop_distance', 1.2)
         self.declare_parameter('uwb_timeout', 30.0)
-        self.declare_parameter('pc_timeout', 20.0)
+        self.declare_parameter('pc_timeout', 30.0)
         self.declare_parameter('odom_timeout', 5.0)
         self.declare_parameter('max_linear_speed', 1.0)
         self.declare_parameter('max_angular_speed', 0.7)
@@ -94,21 +94,21 @@ class TaskLogicNode(Node):
 
         self.sensor_processor = SensorProcessor(self)
 
+        self.odom_callback_group = ReentrantCallbackGroup()
+
         self.occ_map_dimension = int((self.pc_range[3] - self.pc_range[0]) / self.xy_resolution)
         pc_callback_group = MutuallyExclusiveCallbackGroup()
         self.point_cloud_sub = self.create_subscription(
-            PointCloud2, self.get_parameter('topic_lidar').get_parameter_value().string_value, self.pc_callback, 1, #callback_group=pc_callback_group
+            PointCloud2, self.get_parameter('topic_lidar').get_parameter_value().string_value, self.pc_callback, 1, callback_group=self.odom_callback_group
         )
         self.get_logger().info("Point cloud subscriber node started")
  
         # UWB
-        self.uwb_target = np.zeros(4)
         self.uwb_sub = self.create_subscription(
-             UWB, self.get_parameter('topic_uwb').get_parameter_value().string_value, self.uwb_callback, 1, #callback_group=self.sensor_group
+             UWB, self.get_parameter('topic_uwb').get_parameter_value().string_value, self.uwb_callback, 1, callback_group=self.odom_callback_group
         )
         self.get_logger().info("UWB subscriber node started")
  
-        self.last_uwb_time = None
         self.last_pc_time = None
  
         # VLM
@@ -134,6 +134,7 @@ class TaskLogicNode(Node):
         self.text_data = None
         self.arrive_vlm_count = 0
         self.action_target_position = None
+        self.vlm_request_in_progress = False
  
         # H.264 decoder initialization
         self.bridge = CvBridge()
@@ -160,13 +161,13 @@ class TaskLogicNode(Node):
         # Odom subscriber - store latest odom data without immediate processing
         self.latest_odom_msg = None
         self.odom_sub = self.create_subscription(
-            Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.odom_callback, 1, #callback_group=self.sensor_group
+            Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.odom_callback, 1, callback_group=self.odom_callback_group
         )
         self.get_logger().info("Odom subscriber node started")
         
         # Add timer for monitoring sensor health including odometry
         self.sensor_health_timer = self.create_timer(
-            1.0, self.check_sensor_health, #callback_group=self.timer_group
+            10.0, self.check_sensor_health, #callback_group=self.timer_group
         )
 
 
@@ -185,11 +186,9 @@ class TaskLogicNode(Node):
 
 
     def uwb_callback(self, uwb_msg):
-        self.last_uwb_time = time.time()
-        # Extract UWB state
-        distance = uwb_msg.distance
-        angle = np.deg2rad(-uwb_msg.angle - 120)
-        self.uwb_target = np.array([distance * np.cos(angle), distance * np.sin(angle), 0, 1])
+        """Store UWB message in sensor processor for later processing"""
+        # TODO: we may need to change the api of the uwb to use sensor_processor.
+        self.sensor_processor.process_uwb(uwb_msg)
 
     def text_callback(self, text_msg):
         """Callback for text commands from /test/command topic"""
@@ -198,6 +197,7 @@ class TaskLogicNode(Node):
             if self.state == self.State.IDLE:
                 self.text_data = text_msg.data
                 self.state = self.State.WAITING_FOR_VLM
+                self.vlm_request_in_progress = False  # Reset flag for new command
                 self.get_logger().info(f"Text command received: '{self.text_data}'. Transitioning to WAITING_FOR_VLM.")
             else:
                 self.get_logger().warn(f"Ignoring text command '{text_msg.data}' while in state {self.state.name}")
@@ -266,8 +266,10 @@ class TaskLogicNode(Node):
         if self.state == self.State.IDLE:
             return
 
-        if self.uwb_target.sum() == 0:
-            self.get_logger().info("Waiting for UWB data...")
+        # Get UWB target when needed for navigation
+        uwb_target = self.sensor_processor.get_uwb_target_position()
+        if uwb_target is None or uwb_target.sum() == 0:
+            self.get_logger().info("Waiting for valid UWB data...")
             return
             
         # Process latest odometry data when needed for navigation
@@ -297,13 +299,21 @@ class TaskLogicNode(Node):
             if self.rgb is None:
                 self.get_logger().info("Waiting for image...")
                 return
-
+            
+            # Check if VLM request is already in progress
+            if self.vlm_request_in_progress:
+                self.get_logger().info("VLM request already in progress, waiting for response...")
+                return
+            
+            # Mark that we're making a VLM request
+            self.vlm_request_in_progress = True
             self.get_logger().info("Prerequisites met. Calling VLM client...")
-            vlm_res = asyncio.run(self.vlm_client.get_action(self.rgb, self.text_data, self.uwb_target))
+            vlm_res = asyncio.run(self.vlm_client.get_action(self.rgb, self.text_data, uwb_target))
 
             if vlm_res is None:
                 self.get_logger().error("VLM processing failed. Returning to IDLE.")
                 self.state = self.State.IDLE
+                self.vlm_request_in_progress = False  # Reset flag on failure
                 return
             
             self.get_logger().info(f"VLM response received: {vlm_res}")
@@ -320,6 +330,7 @@ class TaskLogicNode(Node):
                 if atomic_action.action == "ComeToObject" or atomic_action.action == "Come Here":
                     self.action_target_position = atomic_action.parameters
                     self.state = self.State.EXECUTING_ACTION
+                    self.vlm_request_in_progress = False  # Reset flag on success
                     action_found = True
                     self.get_logger().info(f"Action 'Come Here' found. Target: {self.action_target_position}. Transitioning to EXECUTING_ACTION.")
                     break
@@ -327,6 +338,7 @@ class TaskLogicNode(Node):
             if not action_found:
                 self.get_logger().warn("Unsupported action from VLM. Returning to IDLE.")
                 self.state = self.State.IDLE
+                self.vlm_request_in_progress = False  # Reset flag on unsupported action
 
         elif self.state == self.State.EXECUTING_ACTION:
             self.get_logger().info("State: EXECUTING_ACTION.")
@@ -353,6 +365,7 @@ class TaskLogicNode(Node):
                 self.action_target_position = None
                 self.arrive_vlm_count = 0
                 self.text_data = None
+                self.vlm_request_in_progress = False  # Reset flag when task completes
                 self.motion_controller.stop()
                 return
             occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
@@ -378,16 +391,16 @@ class TaskLogicNode(Node):
             if odom_status['message_count'] % 100 == 0:  # Log periodically when healthy
                 self.get_logger().info(f"Odometry healthy: {odom_status['message_count']} messages, last {odom_status['time_since_last']:.1f}s ago")
         
-        # Check other sensors
-        current_time = time.time()
+        # Check UWB status
+        uwb_status = self.sensor_processor.get_uwb_status()
+        if not uwb_status['fresh']:
+            if uwb_status['time_since_last'] is None:
+                self.get_logger().warn("No UWB data received yet!")
+            else:
+                self.get_logger().warn(f"UWB data stale! Last received {uwb_status['time_since_last']:.1f}s ago")
         
-        if self.last_uwb_time is not None:
-            uwb_age = current_time - self.last_uwb_time
-            if uwb_age > self.uwb_timeout:
-                self.get_logger().warn(f"UWB data stale! Last received {uwb_age:.1f}s ago")
-        else:
-            self.get_logger().warn("No UWB data received yet!")
-            
+        # Check point cloud
+        current_time = time.time()
         if self.last_pc_time is not None:
             pc_age = current_time - self.last_pc_time
             if pc_age > self.pc_timeout:
@@ -400,17 +413,17 @@ class TaskLogicNode(Node):
         Centralized safety check for all critical sensors
         Returns True if it's safe to continue navigation, False otherwise
         """
-        current_time = time.time()
-        
-        # Check UWB timeout
-        if self.last_uwb_time is None:
-            self.get_logger().warn("No UWB data - cannot navigate safely")
-            return False
-        elif current_time - self.last_uwb_time > self.uwb_timeout:
-            self.get_logger().warn(f"UWB timeout ({current_time - self.last_uwb_time:.1f}s) - stopping robot")
+        # Check UWB timeout using sensor processor
+        if not self.sensor_processor.is_uwb_data_fresh():
+            uwb_status = self.sensor_processor.get_uwb_status()
+            if uwb_status['time_since_last'] is None:
+                self.get_logger().warn("No UWB data - cannot navigate safely")
+            else:
+                self.get_logger().warn(f"UWB timeout ({uwb_status['time_since_last']:.1f}s) - stopping robot")
             return False
             
         # Check point cloud timeout
+        current_time = time.time()
         if self.last_pc_time is None:
             self.get_logger().warn("No point cloud data - cannot navigate safely") 
             return False
@@ -433,6 +446,7 @@ class TaskLogicNode(Node):
         """Store odometry message and update timing for health monitoring"""
         self.latest_odom_msg = odom_msg
         # Update timing information without full processing (high frequency callback)
+        # print("get odom ")
         self.sensor_processor.last_odom_time = time.time()
         self.sensor_processor.odom_message_count += 1
 
@@ -440,7 +454,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = TaskLogicNode()
 
-    # rclpy.spin(node)
+    # rclpy.spin(node) 
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(node)
     executor.spin()
