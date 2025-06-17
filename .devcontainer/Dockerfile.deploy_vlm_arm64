@@ -46,7 +46,7 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
     pip install lark
 
 # Setup .bashrc with ROS environment
-RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && 
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 # 设置工作目录
 WORKDIR /home/heng.li/repo/vlm_ws
 

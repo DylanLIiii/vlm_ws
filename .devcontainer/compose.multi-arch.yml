@@ -6,7 +6,7 @@ services:
     develop_vlm:
         build:
             context: . 
-            dockerfile: Dockerfile.develop_vlm_amd64
+            dockerfile: Dockerfile.develop_vlm
             args:
                 USER_ID: ${UID:-1004}
                 GROUP_ID: ${GID:-1004}
@@ -42,6 +42,31 @@ services:
         # The fastrtps_profile.xml file is used to configure Fast RTPS settings. It ensures that the ROS 2 nodes can communicate properly over the network.
             - ..:/vlm_ws
             - /root/fastrtps_profile.xml:/root/fastrtps_profile.xml
+        environment:
+            - ROS_DISTRO=humble
+            - DEBIAN_FRONTEND=noninteractive
+            - HOST_IP=${HOST_IP:-HOST_IP}
+            - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
+            - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+        working_dir: /vlm_ws
+        shm_size: 2gb
+        tty: true
+        stdin_open: true
+        command: /bin/bash
+
+    # Multi-architecture service for deployment
+    deploy_vlm_amd64:
+        build:
+            context: . 
+            dockerfile: Dockerfile.deploy_vlm_amd64
+            platforms:
+                - linux/amd64
+        container_name: vlm_ws_deploy
+        network_mode: host
+        volumes:
+        # The fastrtps_profile.xml file is used to configure Fast RTPS settings. It ensures that the ROS 2 nodes can communicate properly over the network.
+            - ..:/vlm_ws
+            - /home/wheeltec/fastrtps_profile.xml:/home/wheeltec/fastrtps_profile.xml
         environment:
             - ROS_DISTRO=humble
             - DEBIAN_FRONTEND=noninteractive

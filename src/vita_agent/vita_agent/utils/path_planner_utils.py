@@ -102,7 +102,7 @@ def calculate_safety_score(x_traj, y_traj, occ_map):
     y_indices = np.round(y_traj).astype(int)
     
     score = 0
-    kernel_size = 5  # Size of the area to check around each point (path dilation)
+    kernel_size = 3  # Size of the area to check around each point (path dilation), we hard code the 
     
     for x, y in zip(x_indices, y_indices):
         # Check surrounding area for obstacles
