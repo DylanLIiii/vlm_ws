@@ -18,9 +18,8 @@ class VlmClient:
             prompt_name = 'cot_few_shot_go_here_orientation_prompt'
         elif task_mode == 'fix':
             prompt_name = 'cot_go_here_strict_orientation_prompt'
-
-        person_y = float(uwb_target.tolist()[:2][0])
-        person_x = -float(uwb_target.tolist()[:2][1])
+            
+        person_x, person_y = uwb_target[0], uwb_target[1]
 
         if image is not None:
             bgr_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)

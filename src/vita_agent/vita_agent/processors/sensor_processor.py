@@ -55,12 +55,8 @@ class SensorProcessor:
             if len(odom_orientation) != 4:
                 self.logger.error("Invalid odom orientation length, expected 4 elements.")
                 return
-                
-            # Validate quaternion (should have unit length)
-            quat_norm = np.linalg.norm(odom_orientation)
-            if abs(quat_norm - 1.0) > 0.1:  # Allow some tolerance
-                self.logger.warn(f"Quaternion not normalized: norm = {quat_norm}")
-            
+            # DEBUG Usage 
+            self.logger.info(f"Odom xyz: {xyz[:3]}")
             rotation_matrix = R.from_quat(odom_orientation).as_matrix()
             Tr_ego2world = np.eye(4)
             Tr_ego2world[:3, :3] = rotation_matrix
@@ -127,6 +123,8 @@ class SensorProcessor:
             self.logger.warn("UWB data is stale - not using for target calculation")
             return None
         
+        
+        
         # Extract UWB state and calculate target position
         distance = self.latest_uwb_msg.distance
         angle = np.deg2rad(self.latest_uwb_msg.angle + 170)
@@ -134,8 +132,15 @@ class SensorProcessor:
         
         if self.logger.get_effective_level() <= 10:  # DEBUG level
             self.logger.debug(f"UWB target calculated: distance={distance:.2f}, angle={np.rad2deg(angle):.1f}°, position={uwb_target[:2]}")
-            
-        return uwb_target
+        uwb_target_for_vlm = self.process_uwb_for_vlm(uwb_target)
+        print(f"For original uwb: we get {self.latest_uwb_msg.distance, self.latest_uwb_msg.angle}, For uwb, after transformation we get {uwb_target.tolist()[:2]} | For vlm, we transform it as {uwb_target_for_vlm}")
+        return uwb_target_for_vlm
+    
+    def process_uwb_for_vlm(self, uwb_target):
+        person_y = float(uwb_target.tolist()[:2][0])
+        person_x = -float(uwb_target.tolist()[:2][1])
+        
+        return np.array([person_x, person_y])
 
     def is_uwb_data_fresh(self):
         """Check if UWB data is fresh (within timeout period)"""

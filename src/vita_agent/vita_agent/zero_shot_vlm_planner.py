@@ -271,15 +271,7 @@ class TaskLogicNode(Node):
         if uwb_target is None or uwb_target.sum() == 0:
             self.get_logger().info("Waiting for valid UWB data...")
             return
-            
-        # Process latest odometry data when needed for navigation
-        if self.latest_odom_msg is not None:
-            self.sensor_processor.process_odom(self.latest_odom_msg)
-            
-        # Check if transforms are ready
-        if self.sensor_processor.Tr_init2ego is None:
-            self.get_logger().warn("Odometry transforms not yet initialized - waiting for odometry data")
-            return
+        
 
         # For navigation states, check safety conditions
         if self.state in [self.State.WAITING_FOR_VLM, self.State.EXECUTING_ACTION]:
@@ -302,9 +294,9 @@ class TaskLogicNode(Node):
             
             # Check if VLM request is already in progress
             if self.vlm_request_in_progress:
-                self.get_logger().info("VLM request already in progress, waiting for response...")
+                if self.frame_count % 20 == 0:
+                    self.get_logger().info("VLM request already in progress, waiting for response...")
                 return
-            
             # Mark that we're making a VLM request
             self.vlm_request_in_progress = True
             self.get_logger().info("Prerequisites met. Calling VLM client...")
@@ -348,6 +340,14 @@ class TaskLogicNode(Node):
                 return
 
             tracking_position = [self.action_target_position[0], self.action_target_position[1], 0, 1]
+            self.sensor_processor.process_odom(self.latest_odom_msg)
+            
+            
+            # Check if transforms are ready
+            if self.sensor_processor.Tr_init2ego is None:
+                self.get_logger().warn("Odometry transforms not yet initialized - waiting for odometry data")
+                return
+            
             tracking_position = self.sensor_processor.Tr_init2ego @ tracking_position
             
             self.get_logger().info(f"Current tracking position: {tracking_position[:2]}")
