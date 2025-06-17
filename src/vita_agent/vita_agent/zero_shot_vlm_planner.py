@@ -193,6 +193,7 @@ class TaskLogicNode(Node):
 
     def text_callback(self, text_msg):
         """Callback for text commands from /test/command topic"""
+        print("Now I am getting text msg")
         if text_msg and text_msg.data:
             if self.state == self.State.IDLE:
                 self.text_data = text_msg.data
