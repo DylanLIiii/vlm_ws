@@ -127,7 +127,7 @@ class SensorProcessor:
         
         # Extract UWB state and calculate target position
         distance = self.latest_uwb_msg.distance
-        angle = np.deg2rad(self.latest_uwb_msg.angle + 170)
+        angle = np.deg2rad(-self.latest_uwb_msg.angle + 170)
         uwb_target = np.array([distance * np.cos(angle), distance * np.sin(angle), 0, 1])
         
         if self.logger.get_effective_level() <= 10:  # DEBUG level
