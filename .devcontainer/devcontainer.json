@@ -1,8 +1,8 @@
 {
   "name": "vlm_ws-dev",
-  "dockerComposeFile": "compose.yml",
-  "service": "develop_vlm",
-  "workspaceFolder": "/home/heng.li/repo/vlm_ws",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "develop",
+  "workspaceFolder": "/home/${localEnv:USER}/repo/vlm_ws",
   "remoteUser": "${localEnv:USER}",
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"
@@ -14,5 +14,6 @@
     "RooVeterinaryInc.roo-cline",
     "MarsCode.marscode-extension",
     "Augment.vscode-augment"
-  ]
+  ],
+  "postCreateCommand": "make info"
 }
