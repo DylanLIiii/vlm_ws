@@ -1,0 +1,89 @@
+# VLM Workspace Docker Compose Configuration
+# Unified configuration for development and deployment
+
+services:
+  # Development service (AMD64)
+  develop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_ID: ${UID:-1000}
+        GROUP_ID: ${GID:-1000}
+        USER_NAME: ${USER:-developer}
+        BUILD_TYPE: development
+        TARGETARCH: amd64
+      platforms:
+        - linux/amd64
+    image: vlm_ws:dev-latest
+    container_name: vlm_ws_dev
+    network_mode: host
+    volumes:
+      - .:/home/${USER:-developer}/repo/vlm_ws
+    environment:
+      - ROS_DISTRO=humble
+      - DEBIAN_FRONTEND=noninteractive
+      - HOST_IP=${HOST_IP:-localhost}
+      - PYTHONPATH=/opt/miniconda3/envs/vlm/lib/python3.10/site-packages/
+      - PULSE_SERVER=unix:/tmp/pulse-socket
+    working_dir: /home/${USER:-developer}/repo/vlm_ws
+    shm_size: 2gb
+    tty: true
+    stdin_open: true
+    command: /bin/bash
+
+  # Deployment service (AMD64)
+  deploy-amd64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_TYPE: deployment
+        TARGETARCH: amd64
+      platforms:
+        - linux/amd64
+    image: ${REGISTRY:-192.168.31.199:8000}/vlm_ws:${TAG:-latest}-amd64
+    container_name: vlm_ws_deploy_amd64
+    network_mode: host
+    volumes:
+      - .:/vlm_ws
+      - /home/wheeltec/fastrtps_profile.xml:/home/wheeltec/fastrtps_profile.xml
+    environment:
+      - ROS_DISTRO=humble
+      - DEBIAN_FRONTEND=noninteractive
+      - HOST_IP=${HOST_IP:-localhost}
+      - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    working_dir: /vlm_ws
+    shm_size: 2gb
+    tty: true
+    stdin_open: true
+    command: /bin/bash
+
+  # Deployment service (ARM64)
+  deploy-arm64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_TYPE: deployment
+        TARGETARCH: arm64
+      platforms:
+        - linux/arm64
+    image: ${REGISTRY:-192.168.31.199:8000}/vlm_ws:${TAG:-latest}-arm64
+    container_name: vlm_ws_deploy_arm64
+    network_mode: host
+    volumes:
+      - .:/vlm_ws
+      - /root/fastrtps_profile.xml:/root/fastrtps_profile.xml
+    environment:
+      - ROS_DISTRO=humble
+      - DEBIAN_FRONTEND=noninteractive
+      - HOST_IP=${HOST_IP:-localhost}
+      - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    working_dir: /vlm_ws
+    shm_size: 2gb
+    tty: true
+    stdin_open: true
+    command: /bin/bash

@@ -1,0 +1,79 @@
+# VLM Workspace Docker ignore file
+# Optimizes build performance by excluding unnecessary files
+
+# Git and version control
+.git
+.gitignore
+.gitattributes
+.gitmodules
+
+# Documentation
+*.md
+docs/
+README*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build artifacts
+build/
+install/
+log/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# ROS
+devel/
+.catkin_workspace
+
+# Backup files
+*.bak
+*.backup
+*~
+.docker-setup-backup-*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Data directories (exclude large datasets)
+data/
+datasets/
+*.bag
+*.mcap
+
+# Migration and old setup files
+migrate-docker-setup.sh
+.devcontainer/justfile
+.devcontainer/build-multiarch.sh
+.devcontainer/compose.yml
+.devcontainer/compose.multi-arch.yml
+.devcontainer/Dockerfile.develop_vlm
+.devcontainer/Dockerfile.deploy_vlm_*
+.devcontainer/README-multiarch.md

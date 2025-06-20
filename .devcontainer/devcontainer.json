@@ -1,11 +1,15 @@
 {
   "name": "vlm_ws-dev",
-  "dockerComposeFile": "compose.yml",
-  "service": "develop_vlm",
-  "workspaceFolder": "/home/heng.li/repo/vlm_ws",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "develop",
+  "workspaceFolder": "/home/${localEnv:USER}/repo/vlm_ws",
   "remoteUser": "${localEnv:USER}",
   "settings": {
-    "terminal.integrated.defaultProfile.linux": "bash"
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "remote.downloadExtensionsLocally": true,
+    "remote.extensionKind": {
+      "ms-azuretools.vscode-docker": ["ui"]
+    }
   },
   "extensions": [
     "ms-python.python",
@@ -14,5 +18,15 @@
     "RooVeterinaryInc.roo-cline",
     "MarsCode.marscode-extension",
     "Augment.vscode-augment"
-  ]
+  ],
+  "postCreateCommand": "make info",
+  "initializeCommand": "docker info > /dev/null 2>&1 || (echo 'Docker is not running or not accessible' && exit 1)",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "remote.localPortHost": "allInterfaces"
+      }
+    }
+  }
 }
