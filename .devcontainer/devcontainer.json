@@ -16,7 +16,6 @@
     "ms-python.vscode-pylance",
     "ms-azuretools.vscode-docker",
     "RooVeterinaryInc.roo-cline",
-    "MarsCode.marscode-extension",
     "Augment.vscode-augment"
   ],
   "postCreateCommand": "make info",

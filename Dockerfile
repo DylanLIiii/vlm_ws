@@ -62,7 +62,12 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
         requests \
         opencv-python \
         av \
-        lark
+        lark \ 
+        deep_translator \ 
+        litellm \
+        fastapi \
+        tqdm \
+        pydantic 
 
 # Install additional development packages
 RUN if [ "$BUILD_TYPE" = "development" ]; then \
