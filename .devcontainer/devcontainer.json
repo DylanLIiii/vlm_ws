@@ -5,7 +5,11 @@
   "workspaceFolder": "/home/${localEnv:USER}/repo/vlm_ws",
   "remoteUser": "${localEnv:USER}",
   "settings": {
-    "terminal.integrated.defaultProfile.linux": "bash"
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "remote.downloadExtensionsLocally": true,
+    "remote.extensionKind": {
+      "ms-azuretools.vscode-docker": ["ui"]
+    }
   },
   "extensions": [
     "ms-python.python",
@@ -15,5 +19,14 @@
     "MarsCode.marscode-extension",
     "Augment.vscode-augment"
   ],
-  "postCreateCommand": "make info"
+  "postCreateCommand": "make info",
+  "initializeCommand": "docker info > /dev/null 2>&1 || (echo 'Docker is not running or not accessible' && exit 1)",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "remote.localPortHost": "allInterfaces"
+      }
+    }
+  }
 }

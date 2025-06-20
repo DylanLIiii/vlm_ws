@@ -43,10 +43,20 @@ help: ## Show this help message
 .PHONY: setup
 setup: ## Setup Docker buildx for multi-architecture builds
 	$(call print_info,"Setting up Docker buildx...")
-	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use 2>/dev/null || \
+	@echo '[registry."192.168.31.199:8000"]\n  http = true\n  insecure = true' > buildkitd.toml
+	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml 2>/dev/null || \
 		docker buildx use $(BUILDER_NAME) 2>/dev/null || true
 	@docker buildx inspect --bootstrap
 	$(call print_success,"Buildx setup completed")
+
+.PHONY: force-setup
+force-setup: ## Force remove and recreate Docker buildx builder
+	$(call print_info,"Forcing buildx setup...")
+	@docker buildx rm $(BUILDER_NAME) 2>/dev/null || true
+	@echo '[registry."192.168.31.199:8000"]\n  http = true\n  insecure = true' > buildkitd.toml
+	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml
+	@docker buildx inspect --bootstrap
+	$(call print_success,"Buildx force setup completed")
 
 .PHONY: clean
 clean: ## Clean up Docker buildx builder

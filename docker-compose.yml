@@ -20,7 +20,6 @@ services:
     network_mode: host
     volumes:
       - .:/home/${USER:-developer}/repo/vlm_ws
-      - /mnt/data2/yueyu.wang/data/20250527:/home/${USER:-developer}/repo/vlm_ws/src/vita_agent/data
     environment:
       - ROS_DISTRO=humble
       - DEBIAN_FRONTEND=noninteractive
