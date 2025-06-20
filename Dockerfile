@@ -5,7 +5,7 @@ ARG TARGETARCH
 ARG BUILDPLATFORM
 
 # Choose base image based on target architecture
-FROM 192.168.31.199:8000/library/ros:humble_${TARGETARCH}
+FROM 192.168.31.199:8000/library/ros:humble_${TARGETARCH} AS base
 
 # Build arguments
 ARG USER_ID=1000
@@ -51,22 +51,7 @@ RUN if [ "$BUILD_TYPE" = "development" ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Create user for development builds
-RUN if [ "$BUILD_TYPE" = "development" ]; then \
-        if [ -z "${USER_ID}" ] || [ -z "${GROUP_ID}" ] || [ -z "${USER_NAME}" ]; then \
-            echo "Error: USER_ID, GROUP_ID, and USER_NAME must be set for development builds." && exit 1; \
-        fi && \
-        groupadd -g ${GROUP_ID} ${USER_NAME} 2>/dev/null || true && \
-        useradd --create-home --shell /bin/bash -u ${USER_ID} -g ${GROUP_ID} ${USER_NAME} && \
-        echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER_NAME} && \
-        chmod 0440 /etc/sudoers.d/${USER_NAME}; \
-    fi
-
-# Switch to user for development, stay as root for deployment
-USER ${BUILD_TYPE:+${USER_NAME}}
-WORKDIR ${BUILD_TYPE:+/home/${USER_NAME}}
-
-# Configure pip and install Python packages
+# Configure pip and install Python packages (as root for both cases)
 RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
     pip install \
         empy==3.3.4 \
@@ -84,6 +69,17 @@ RUN if [ "$BUILD_TYPE" = "development" ]; then \
         pip install pytest-asyncio; \
     fi
 
+# Create user for development builds only
+RUN if [ "$BUILD_TYPE" = "development" ]; then \
+        if [ -z "${USER_ID}" ] || [ -z "${GROUP_ID}" ] || [ -z "${USER_NAME}" ]; then \
+            echo "Error: USER_ID, GROUP_ID, and USER_NAME must be set for development builds." && exit 1; \
+        fi && \
+        groupadd -g ${GROUP_ID} ${USER_NAME} 2>/dev/null || true && \
+        useradd --create-home --shell /bin/bash -u ${USER_ID} -g ${GROUP_ID} ${USER_NAME} && \
+        echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER_NAME} && \
+        chmod 0440 /etc/sudoers.d/${USER_NAME}; \
+    fi
+
 # Setup .bashrc with ROS environment
 RUN if [ "$BUILD_TYPE" = "development" ]; then \
         echo "source /opt/ros/humble/setup.bash" >> /home/${USER_NAME}/.bashrc && \
@@ -93,18 +89,35 @@ RUN if [ "$BUILD_TYPE" = "development" ]; then \
         echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc; \
     fi
 
-# Install x-cmd for development builds
+# Install x-cmd for development builds only
 RUN if [ "$BUILD_TYPE" = "development" ]; then \
         curl -fsSL https://get.x-cmd.com | bash; \
     fi
 
-# Set working directory based on build type
-WORKDIR ${BUILD_TYPE:+/home/heng.li/repo/vlm_ws}
-WORKDIR ${BUILD_TYPE:-/vlm_ws}
+# Create startup script that handles user switching and working directory
+RUN echo '#!/bin/bash' > /startup.sh && \
+    echo 'if [ "$BUILD_TYPE" = "development" ]; then' >> /startup.sh && \
+    echo '    cd /home/heng.li/repo/vlm_ws' >> /startup.sh && \
+    echo '    if [ "$(id -u)" = "0" ]; then' >> /startup.sh && \
+    echo '        exec su - '"${USER_NAME}"' -c "cd /home/heng.li/repo/vlm_ws && exec \"\$@\""' >> /startup.sh && \
+    echo '    else' >> /startup.sh && \
+    echo '        exec "$@"' >> /startup.sh && \
+    echo '    fi' >> /startup.sh && \
+    echo 'else' >> /startup.sh && \
+    echo '    cd /vlm_ws' >> /startup.sh && \
+    echo '    exec "$@"' >> /startup.sh && \
+    echo 'fi' >> /startup.sh && \
+    chmod +x /startup.sh
+
+# Set working directory (will be overridden by startup script)
+WORKDIR /
 
 # Add build info
 RUN echo "Built for architecture: ${TARGETARCH}" > /tmp/build-info.txt && \
     echo "Build type: ${BUILD_TYPE}" >> /tmp/build-info.txt
+
+# Use startup script as entrypoint
+ENTRYPOINT ["/startup.sh"]
 
 # Default command
 CMD ["/bin/bash"]
