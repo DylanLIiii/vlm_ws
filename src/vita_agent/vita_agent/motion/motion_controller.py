@@ -35,8 +35,8 @@ class MotionController:
             self.vyaw = np.sign(self.vyaw) * self.node.max_angular_speed
 
         msg = Twist()
-        msg.linear.x = self.vx
-        msg.angular.z = self.vyaw * 0.4  # Apply angular velocity scaling factor
+        msg.linear.x = self.vx * 0.7
+        msg.angular.z = self.vyaw * 0.3  # Apply angular velocity scaling factor
 
         self.vel_cmd_publisher.publish(msg)
         
@@ -46,7 +46,8 @@ class MotionController:
         self._publish_count += 1
         
         if self._publish_count % 10 == 1 or (abs(self.vx) > 0.1 or abs(self.vyaw) > 0.1):
-            self.logger.info(f'Publishing velocity: linear.x={msg.linear.x:.3f}, angular.z={msg.angular.z:.3f}')
+            # self.logger.info(f'Publishing velocity: linear.x={msg.linear.x:.3f}, angular.z={msg.angular.z:.3f}')
+            pass 
 
     def go_back(self):
         self.logger.info("Collision detected, moving back.")
@@ -59,8 +60,15 @@ class MotionController:
         self.vyaw = 0.0
         self.logger.info("Robot stopped")
 
-    def move_to_target(self, p_xyz_vcs, v_traj, w_traj):
-        distance = np.hypot(p_xyz_vcs[0], p_xyz_vcs[1])
+    def move_to_target(self, p_xyz_vcs, v_traj, w_traj, uwb_distance=None):
+        # NOTE: Use UWB distance if provided, otherwise fall back to calculated distance
+        # I think we need 
+        if uwb_distance is not None:
+            distance = uwb_distance
+            self.logger.debug(f"Using UWB distance: {distance:.2f}m")
+        else:
+            distance = np.hypot(p_xyz_vcs[0], p_xyz_vcs[1])
+            self.logger.debug(f"Using calculated distance: {distance:.2f}m")
 
         if distance < self.node.stop_distance:
             # self.stop()

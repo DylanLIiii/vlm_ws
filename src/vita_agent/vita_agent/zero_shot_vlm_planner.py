@@ -7,6 +7,8 @@ import urllib.parse
 import base64
 import httpx
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import rclpy
 from rclpy.node import Node
@@ -75,7 +77,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('topic_odom', '/rt/odom')
         self.declare_parameter('pc_range', [-5.0, -5.0, -0.1, 5.0, 5.0, 1.2])
         self.declare_parameter('xy_resolution', 0.1)
-        self.declare_parameter('stop_distance', 1.2)
+        self.declare_parameter('stop_distance', 1.5)
         self.declare_parameter('uwb_timeout', 30.0)
         self.declare_parameter('pc_timeout', 30.0)
         self.declare_parameter('odom_timeout', 5.0)
@@ -135,6 +137,8 @@ class TaskLogicNode(Node):
         self.arrive_vlm_count = 0
         self.action_target_position = None
         self.vlm_request_in_progress = False
+        self.vlm_thread_executor = ThreadPoolExecutor(max_workers=1)
+        self._state_lock = threading.Lock()  # Add thread safety for state changes
  
         # H.264 decoder initialization
         self.bridge = CvBridge()
@@ -172,13 +176,20 @@ class TaskLogicNode(Node):
 
 
     def destroy_node(self):
-        """Cleanup method to properly close H.264 decoder context"""
+        """Cleanup method to properly close H.264 decoder context and thread executor"""
         try:
             if hasattr(self, 'h264_decoder') and self.h264_decoder is not None:
                 self.h264_decoder.reset()
                 self.get_logger().info("H.264 decoder context reset")
         except Exception as e:
             self.get_logger().warn(f"Error resetting H.264 decoder context: {e}")
+        
+        try:
+            if hasattr(self, 'vlm_thread_executor') and self.vlm_thread_executor is not None:
+                self.vlm_thread_executor.shutdown(wait=True)
+                self.get_logger().info("VLM thread executor shutdown")
+        except Exception as e:
+            self.get_logger().warn(f"Error shutting down VLM thread executor: {e}")
         
         super().destroy_node()
 
@@ -265,12 +276,6 @@ class TaskLogicNode(Node):
 
         if self.state == self.State.IDLE:
             return
-
-        # Get UWB target when needed for navigation
-        uwb_target = self.sensor_processor.get_uwb_target_position()
-        if uwb_target is None or uwb_target.sum() == 0:
-            self.get_logger().info("Waiting for valid UWB data...")
-            return
         
 
         # For navigation states, check safety conditions
@@ -294,43 +299,19 @@ class TaskLogicNode(Node):
             
             # Check if VLM request is already in progress
             if self.vlm_request_in_progress:
-                if self.frame_count % 20 == 0:
-                    self.get_logger().info("VLM request already in progress, waiting for response...")
+                self.get_logger().debug("VLM request already in progress, waiting for response...")
                 return
             # Mark that we're making a VLM request
             self.vlm_request_in_progress = True
-            self.get_logger().info("Prerequisites met. Calling VLM client...")
-            vlm_res = asyncio.run(self.vlm_client.get_action(self.rgb, self.text_data, uwb_target))
-
-            if vlm_res is None:
-                self.get_logger().error("VLM processing failed. Returning to IDLE.")
-                self.state = self.State.IDLE
-                self.vlm_request_in_progress = False  # Reset flag on failure
+            self.get_logger().info("Prerequisites met. Starting VLM request in background thread...")
+            
+            # Submit VLM request to thread pool to avoid blocking
+                    # Get UWB target when needed for navigation
+            uwb_target = self.sensor_processor.get_uwb_target_position()
+            if uwb_target is None or uwb_target.sum() == 0:
+                self.get_logger().info("Waiting for valid UWB data...")
                 return
-            
-            self.get_logger().info(f"VLM response received: {vlm_res}")
-            
-            class FakeAction:
-                action = "Come Here"
-                parameters = vlm_res
-            
-            fake_response = {"actions": [FakeAction]}
-            atomic_actions = fake_response['actions']
-
-            action_found = False
-            for atomic_action in atomic_actions:
-                if atomic_action.action == "ComeToObject" or atomic_action.action == "Come Here":
-                    self.action_target_position = atomic_action.parameters
-                    self.state = self.State.EXECUTING_ACTION
-                    self.vlm_request_in_progress = False  # Reset flag on success
-                    action_found = True
-                    self.get_logger().info(f"Action 'Come Here' found. Target: {self.action_target_position}. Transitioning to EXECUTING_ACTION.")
-                    break
-            
-            if not action_found:
-                self.get_logger().warn("Unsupported action from VLM. Returning to IDLE.")
-                self.state = self.State.IDLE
-                self.vlm_request_in_progress = False  # Reset flag on unsupported action
+            self.vlm_thread_executor.submit(self._handle_vlm_request_sync, self.rgb, self.text_data, uwb_target)
 
         elif self.state == self.State.EXECUTING_ACTION:
             self.get_logger().info("State: EXECUTING_ACTION.")
@@ -369,13 +350,73 @@ class TaskLogicNode(Node):
                 self.motion_controller.stop()
                 return
             occupancy_map_local = self.sensor_processor.process_point_cloud(point_cloud_msg)
-            v_traj, w_traj, stop_flag = self.path_planner.plan_trajectory(tracking_position, occupancy_map_local)
+            
+            # Get UWB target for visualization in path planner
+            uwb_target_for_viz_vlm= self.sensor_processor.get_uwb_target_position()
+            uwb_target_for_viz_ego = uwb_target_for_viz_vlm[1], -uwb_target_for_viz_vlm[0]
+            
+            
+            v_traj, w_traj, stop_flag = self.path_planner.plan_trajectory(tracking_position, occupancy_map_local, uwb_target_for_viz_ego)
             self.stop_flag = stop_flag
 
             if self.stop_flag:
                 self.motion_controller.go_back()
             else:
-                self.motion_controller.move_to_target(tracking_position, v_traj, w_traj)
+                # Get UWB distance for motion control
+                uwb_distance = None
+                if self.sensor_processor.latest_uwb_msg is not None:
+                    uwb_distance = self.sensor_processor.latest_uwb_msg.distance_filtered
+                    self.get_logger().debug(f"Using UWB distance for motion control: {uwb_distance:.2f}m")
+                
+                self.motion_controller.move_to_target(tracking_position, v_traj, w_traj, None)
+
+    def _handle_vlm_request_sync(self, rgb_image, text_command, uwb_target):
+        """
+        Handle VLM request synchronously in a background thread to avoid blocking the main callback
+        """
+        try:
+            self.get_logger().info("Calling VLM client in background thread...")
+            
+            # Use asyncio.run in the background thread
+            vlm_res = asyncio.run(self.vlm_client.get_action(rgb_image, text_command, uwb_target))
+
+            # Use thread-safe state updates
+            with self._state_lock:
+                if vlm_res is None:
+                    self.get_logger().error("VLM processing failed. Returning to IDLE.")
+                    self.state = self.State.IDLE
+                    self.vlm_request_in_progress = False  # Reset flag on failure
+                    return
+                
+                self.get_logger().info(f"VLM response received: {vlm_res}")
+                
+                class FakeAction:
+                    action = "Come Here"
+                    parameters = vlm_res
+                
+                fake_response = {"actions": [FakeAction]}
+                atomic_actions = fake_response['actions']
+
+                action_found = False
+                for atomic_action in atomic_actions:
+                    if atomic_action.action == "ComeToObject" or atomic_action.action == "Come Here":
+                        self.action_target_position = atomic_action.parameters
+                        self.state = self.State.EXECUTING_ACTION
+                        self.vlm_request_in_progress = False  # Reset flag on success
+                        action_found = True
+                        self.get_logger().info(f"Action 'Come Here' found. Target: {self.action_target_position}. Transitioning to EXECUTING_ACTION.")
+                        break
+                
+                if not action_found:
+                    self.get_logger().warn("Unsupported action from VLM. Returning to IDLE.")
+                    self.state = self.State.IDLE
+                    self.vlm_request_in_progress = False  # Reset flag on unsupported action
+                
+        except Exception as e:
+            self.get_logger().error(f"Error in VLM request: {e}")
+            with self._state_lock:
+                self.state = self.State.IDLE
+                self.vlm_request_in_progress = False  # Reset flag on error
 
     def check_sensor_health(self):
         """Periodic health check for all sensors including odometry"""

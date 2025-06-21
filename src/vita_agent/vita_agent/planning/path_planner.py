@@ -24,7 +24,7 @@ class PathPlanner:
         self.global_planner = PathFinderController(kp_rho, kp_alpha)
         self.local_yaw_rate_list = generate_local_yaw_rate(rot_steps, rot_step_size)
 
-    def plan_trajectory(self, goal_position, occupancy_map):
+    def plan_trajectory(self, goal_position, occupancy_map, uwb_target_position=None):
         # path planning
         x_s, y_s, theta_s = 0.0, 0.0, 0.0
         x_g, y_g = goal_position[0], goal_position[1]
@@ -34,6 +34,6 @@ class PathPlanner:
             self.local_yaw_rate_list, self.occ_dilate_kernel_size,
             self.node.pc_range, self.node.xy_resolution, self.node.stop_distance,
             self.global_planner, self.node.max_linear_speed, self.node.max_angular_speed,
-            self.dt, self.max_plan_steps
+            self.dt, self.max_plan_steps, uwb_target_position
         )
         return v_traj, w_traj, stop_flag

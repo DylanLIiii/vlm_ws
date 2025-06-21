@@ -219,7 +219,7 @@ def generate_local_path(
 
 def plan_path(x_start, y_start, theta_start, x_goal, y_goal, x_path_global, y_path_global, occ_map,
               local_yaw_rate_list, occ_dilate_kernel_size, pc_range, xy_resolution, stop_distance,
-              global_planner, max_linear_speed, max_angular_speed, dt, max_plan_steps):
+              global_planner, max_linear_speed, max_angular_speed, dt, max_plan_steps, uwb_target_position=None):
     """
         Plan a path from start to goal, considering obstacles.
     """
@@ -240,6 +240,18 @@ def plan_path(x_start, y_start, theta_start, x_goal, y_goal, x_path_global, y_pa
     vis_img = (1 - occ_map_vis) * 255  # Convert to 0-255 range
     vis_img = vis_img.astype(np.uint8)
     vis_img = cv2.cvtColor(vis_img, cv2.COLOR_GRAY2BGR)
+    
+    # Visualize the goal position (trajectory target from VLM)
+    x_goal_grid = int((x_goal - pc_range[0]) / xy_resolution)
+    y_goal_grid = int((y_goal - pc_range[1]) / xy_resolution)
+    cv2.circle(vis_img, (y_goal_grid, x_goal_grid), 3, (0, 200, 200), -1)  # Cyan for trajectory goal
+    
+    # Visualize the UWB target position (actual person location) if available
+    if uwb_target_position is not None:
+        x_uwb_grid = int((uwb_target_position[0] - pc_range[0]) / xy_resolution)
+        y_uwb_grid = int((uwb_target_position[1] - pc_range[1]) / xy_resolution)
+        cv2.circle(vis_img, (y_uwb_grid, x_uwb_grid), 5, (0, 0, 255), -1)  # Red for UWB target (person)
+        cv2.circle(vis_img, (y_uwb_grid, x_uwb_grid), 7, (0, 0, 255), 2)   # Red outline for emphasis
 
     stop_flag = False
     v_traj_global, w_traj_update = [], []
@@ -328,6 +340,6 @@ def plan_path(x_start, y_start, theta_start, x_goal, y_goal, x_path_global, y_pa
     display_size = (300, 300)
     vis_img = cv2.resize(vis_img, display_size, interpolation=cv2.INTER_NEAREST)
 
-    cv2.imwrite(f'/home/wheeltec/sensor_ws/yy_tmp/vis_img_{time.time()}.png', vis_img)
+    cv2.imwrite(f'/vlm_ws/viz/path/vis_img_{time.time()}.png', vis_img)
     
     return x_start, y_start, theta_start, x_path_global, y_path_global, v_traj_global, w_traj_update, stop_flag

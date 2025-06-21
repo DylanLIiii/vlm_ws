@@ -56,7 +56,7 @@ class SensorProcessor:
                 self.logger.error("Invalid odom orientation length, expected 4 elements.")
                 return
             # DEBUG Usage 
-            self.logger.info(f"Odom xyz: {xyz[:3]}")
+            # self.logger.info(f"Odom xyz: {xyz[:3]}")
             rotation_matrix = R.from_quat(odom_orientation).as_matrix()
             Tr_ego2world = np.eye(4)
             Tr_ego2world[:3, :3] = rotation_matrix
@@ -126,19 +126,21 @@ class SensorProcessor:
         
         
         # Extract UWB state and calculate target position
-        distance = self.latest_uwb_msg.distance
-        angle = np.deg2rad(-self.latest_uwb_msg.angle + 170)
+        distance = self.latest_uwb_msg.distance_filtered
+        angle = np.deg2rad(-self.latest_uwb_msg.angle_filtered + 170)
         uwb_target = np.array([distance * np.cos(angle), distance * np.sin(angle), 0, 1])
         
         if self.logger.get_effective_level() <= 10:  # DEBUG level
             self.logger.debug(f"UWB target calculated: distance={distance:.2f}, angle={np.rad2deg(angle):.1f}°, position={uwb_target[:2]}")
         uwb_target_for_vlm = self.process_uwb_for_vlm(uwb_target)
-        print(f"For original uwb: we get {self.latest_uwb_msg.distance, self.latest_uwb_msg.angle}, For uwb, after transformation we get {uwb_target.tolist()[:2]} | For vlm, we transform it as {uwb_target_for_vlm}")
+        # print(f"For original uwb: we get {self.latest_uwb_msg.distance, self.latest_uwb_msg.angle}, For uwb, after transformation we get {uwb_target.tolist()[:2]} | For vlm, we transform it as {uwb_target_for_vlm}")
         return uwb_target_for_vlm
     
     def process_uwb_for_vlm(self, uwb_target):
-        person_y = float(uwb_target.tolist()[:2][0])
-        person_x = -float(uwb_target.tolist()[:2][1])
+        # current we use x as positive heading (front) ,the left is y positive 
+        # for vlm we use y as positive heading (front) ,the right is x position
+        person_x = -float(uwb_target.tolist()[:2][1])  # current y (left) -> VLM x (right), negate to flip left to right
+        person_y = float(uwb_target.tolist()[:2][0])   # current x (front) -> VLM y (front)
         
         return np.array([person_x, person_y])
 

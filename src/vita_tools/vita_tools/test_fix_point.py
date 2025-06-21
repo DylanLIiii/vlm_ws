@@ -51,7 +51,7 @@ class FixPointTestNode(Node):
         # Control parameters
         self.declare_parameter('target_x', 5.0)
         self.declare_parameter('target_y', 0.0)
-        self.declare_parameter('position_tolerance', 0.1)
+        self.declare_parameter('position_tolerance', 1.0)
         
         # Initialize sensor processor
         self.sensor_processor = SensorProcessor(self)
@@ -85,7 +85,7 @@ class FixPointTestNode(Node):
         self.control_timer = self.create_timer(0.1, self.control_loop)  # 10 Hz control loop
         
         # Status timer
-        self.status_timer = self.create_timer(1.0, self.publish_status)
+        #self.status_timer = self.create_timer(10.0, self.publish_status)
         
         # Target point
         self.target_x = self.get_parameter('target_x').get_parameter_value().double_value
@@ -108,6 +108,7 @@ class FixPointTestNode(Node):
         self.last_control_time = None
         self.latest_occupancy_map = None
         self.latest_point_cloud_msg = None
+        self.latest_odom_msg = None
         
         self.get_logger().info("Fix Point Test Node initialized")
         self.get_logger().info(f"Target point: ({self.target_x:.2f}, {self.target_y:.2f})")
@@ -115,49 +116,32 @@ class FixPointTestNode(Node):
         self.get_logger().info(f"Publishing velocity commands on: {self.get_parameter('topic_vel_cmd').get_parameter_value().string_value}")
         self.get_logger().info(f"Position tolerance: {self.position_tolerance:.3f}m")
         self.get_logger().info(f"Stop distance: {self.stop_distance:.3f}m")
+        
+
 
     def odom_callback(self, odom_msg):
         """Process odometry message through SensorProcessor"""
-        self.sensor_processor.process_odom(odom_msg)
+        self.latest_odom_msg = odom_msg
         
     def point_cloud_callback(self, point_cloud_msg):
         """Process point cloud message and store for path planning"""
         self.latest_point_cloud_msg = point_cloud_msg
-        # Process point cloud through sensor processor to get occupancy map
-        self.latest_occupancy_map = self.sensor_processor.process_point_cloud(point_cloud_msg)
         
     def control_loop(self):
         """Main control loop using path planner and motion controller"""
-        # Check if we have valid odometry data
-        odom_status = self.sensor_processor.get_odom_status()
-        if not odom_status['fresh'] or not odom_status['transforms_ready']:
-            # Stop the robot if no fresh odometry
+        if self.latest_odom_msg is None:
             self.motion_controller.stop()
-            if self.last_control_time is None or (time.time() - self.last_control_time) > 5.0:
-                self.get_logger().warn("No fresh odometry data - stopping robot")
-                self.last_control_time = time.time()
-            return
+            return 
             
-        # Check if we have a fresh occupancy map from point cloud
-        if self.latest_occupancy_map is None:
-            self.motion_controller.stop()
-            if self.last_control_time is None or (time.time() - self.last_control_time) > 5.0:
-                self.get_logger().warn("No occupancy map available - stopping robot")
-                self.last_control_time = time.time()
-            return
-            
-        # Get current position from sensor processor
-        if self.sensor_processor.xyz is None:
-            self.motion_controller.stop()
-            return
-            
-        current_pos = self.sensor_processor.xyz[:2]  # [x, y] in initial frame
-        
         # Calculate distance to target
         target_pos = self.target_point[:2]  # [x, y]
-        position_error = target_pos - current_pos
-        distance_to_target = np.linalg.norm(position_error)
-        
+
+        self.sensor_processor.process_odom(self.latest_odom_msg)
+        current_pos = self.sensor_processor.xyz[:2]  # [x, y] in initial frame
+        occupancy_map_local= self.sensor_processor.process_point_cloud(self.latest_point_cloud_msg)
+        # Transform target to ego frame for path planning
+        target_ego = self.sensor_processor.Tr_init2ego @ self.target_point
+        distance_to_target = np.hypot(target_ego[0], target_ego[1])
         # Check if target is reached
         if distance_to_target < self.position_tolerance:
             if not self.target_reached:
@@ -165,13 +149,10 @@ class FixPointTestNode(Node):
                 self.target_reached = True
             self.motion_controller.stop()
             return
-            
-        # Transform target to ego frame for path planning
-        target_ego = self.sensor_processor.Tr_init2ego @ self.target_point
         
         # Use path planner to generate trajectory
         v_traj, w_traj, stop_flag = self.path_planner.plan_trajectory(
-            target_ego, self.latest_occupancy_map
+            target_ego, occupancy_map_local
         )
         
         if stop_flag:

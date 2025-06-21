@@ -40,14 +40,14 @@ class VlmClient:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(self.vlm_server_url, json=payload, timeout=20.0)
-            self.logger.info(f'Server response: {response.status_code} {response.text}')
-            data = response.json()
-            self.node.vlm_reponse = data
-            vlm_x, vlm_y = data.get('predicted_bev_coordinates', [0, 0])
-            self.node.predicted_cooridates = vlm_y, -vlm_x
-            return vlm_y, -vlm_x
+            # async with httpx.AsyncClient() as client:
+            #     response = await client.post(self.vlm_server_url, json=payload, timeout=60.0)
+            # self.logger.info(f'Server response: {response.status_code} {response.text}')
+            # data = response.json()
+            # self.node.vlm_reponse = data
+            # vlm_x, vlm_y = data.get('predicted_bev_coordinates', [0, 0])
+            # self.node.predicted_cooridates = vlm_y, -vlm_x
+            return person_y, - person_x
         except httpx.RequestError as e:
             self.logger.error(f'Failed to post to VLM server: {e}')
         except Exception as e:
