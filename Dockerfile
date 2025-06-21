@@ -67,7 +67,9 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
         litellm \
         fastapi \
         tqdm \
-        pydantic 
+        pydantic \
+        pillow \
+        uvicorn
 
 # Install additional development packages
 RUN if [ "$BUILD_TYPE" = "development" ]; then \

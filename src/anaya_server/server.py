@@ -45,7 +45,7 @@ class SpatialDataResponse(BaseModel):
 app = FastAPI()
 
 
-@app.post("/process_spatial_data/", response_model=SpatialDataResponse)
+@app.post("/process_spatial_data", response_model=SpatialDataResponse)
 async def process_spatial_data(request_data: SpatialDataRequest):
     # Log the incoming request
     logging.info(
