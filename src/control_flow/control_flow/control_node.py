@@ -1,4 +1,5 @@
 import time
+import json
 from enum import Enum, auto
 
 import rclpy
@@ -63,9 +64,28 @@ class ActionExecutor:
             'follow_stop': 'stop following'
         }
 
+        # Task status monitoring setup
+        self.task_status_subscriber = self.node.create_subscription(
+            String, '/task_status', self.task_status_callback, 10
+        )
+
+        # Movement command tracking
+        self.movement_commands = {
+            'Come Here', 'Come to my front', 'Come to my behind/back',
+            'Come to my left', 'Come to my right'
+        }
+        self.active_movement_command = None
+        self.movement_command_start_time = None
+
+        # Task completion parameters
+        self.distance_threshold = 1.5  # meters - configurable threshold for task completion
+        self.last_task_status = None
+
         self.logger.info("ActionExecutor initialized")
         self.logger.info(f"Joy commands available: {list(self.joy_commands.keys())}")
         self.logger.info(f"Following commands available: {list(self.following_commands.keys())}")
+        self.logger.info(f"Movement commands monitored: {list(self.movement_commands)}")
+        self.logger.info(f"Task status monitoring enabled on /task_status topic")
 
     def execute_action(self, mapped_command):
         """
@@ -92,7 +112,11 @@ class ActionExecutor:
         else:
             # For movement commands like "Come Here", "Come to my front", etc.
             # These are handled by the existing task logic, so we just log and return True
-            self.logger.info(f"Movement command '{mapped_command}' will be handled by task logic")
+            if mapped_command in self.movement_commands:
+                self._start_movement_command_tracking(mapped_command)
+                self.logger.info(f"Movement command '{mapped_command}' will be handled by task logic - tracking started")
+            else:
+                self.logger.info(f"Command '{mapped_command}' will be handled by task logic")
             return True
 
     def _publish_joy_command(self, command):
@@ -165,6 +189,143 @@ class ActionExecutor:
         """
         return self._publish_joy_command('enter_rl_mode')
 
+    def _start_movement_command_tracking(self, command):
+        """
+        Start tracking a movement command for completion monitoring.
+
+        Args:
+            command (str): The movement command to track
+        """
+        self.active_movement_command = command
+        self.movement_command_start_time = time.time()
+        self.logger.info(f"Started tracking movement command: '{command}'")
+
+    def _stop_movement_command_tracking(self):
+        """
+        Stop tracking the current movement command.
+        """
+        if self.active_movement_command:
+            duration = time.time() - self.movement_command_start_time if self.movement_command_start_time else 0
+            self.logger.info(f"Stopped tracking movement command: '{self.active_movement_command}' (duration: {duration:.1f}s)")
+            self.active_movement_command = None
+            self.movement_command_start_time = None
+
+    def task_status_callback(self, msg):
+        """
+        Callback for task status updates from /task_status topic.
+
+        Args:
+            msg (String): JSON-formatted string containing task status information
+        """
+        try:
+            # Parse JSON from the message
+            task_status = json.loads(msg.data)
+            self.last_task_status = task_status
+
+            # Check if we're currently tracking a movement command
+            if self.active_movement_command:
+                self._check_movement_task_completion(task_status)
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse task status JSON: {e}")
+        except Exception as e:
+            self.logger.error(f"Error processing task status: {e}")
+
+    def _check_movement_task_completion(self, task_status):
+        """
+        Check if the current movement task is complete based on task status.
+
+        Args:
+            task_status (dict): Parsed task status information
+        """
+        try:
+            # Extract required fields from task status
+            current_distance = task_status.get('current_distance_to_target')
+            target_reached = task_status.get('target_reached', False)
+            timestamp = task_status.get('timestamp')
+
+            # Log task status for debugging
+            if current_distance is not None:
+                self.logger.debug(f"Task status - Distance: {current_distance:.2f}m, Target reached: {target_reached}")
+
+            # Check completion conditions
+            task_complete = False
+            completion_reason = ""
+
+            if target_reached:
+                task_complete = True
+                completion_reason = "target_reached flag is True"
+            elif current_distance is not None and current_distance <= self.distance_threshold:
+                task_complete = True
+                completion_reason = f"distance ({current_distance:.2f}m) below threshold ({self.distance_threshold}m)"
+
+            if task_complete:
+                self.logger.info(f"Movement task '{self.active_movement_command}' completed: {completion_reason}")
+                self._handle_movement_task_completion()
+
+        except Exception as e:
+            self.logger.error(f"Error checking movement task completion: {e}")
+
+    def _handle_movement_task_completion(self):
+        """
+        Handle the completion of a movement task by automatically stopping following.
+        """
+        try:
+            # Stop tracking the movement command
+            completed_command = self.active_movement_command
+            self._stop_movement_command_tracking()
+
+            # Automatically publish stop following command
+            stop_success = self._publish_following_command('follow_stop')
+
+            if stop_success:
+                self.logger.info(f"Automatically stopped following after completing movement task: '{completed_command}'")
+            else:
+                self.logger.warn(f"Failed to automatically stop following after completing movement task: '{completed_command}'")
+
+        except Exception as e:
+            self.logger.error(f"Error handling movement task completion: {e}")
+
+    def get_task_status(self):
+        """
+        Get the latest task status information.
+
+        Returns:
+            dict: Latest task status or None if no status received
+        """
+        return self.last_task_status
+
+    def is_movement_command_active(self):
+        """
+        Check if a movement command is currently being tracked.
+
+        Returns:
+            bool: True if a movement command is active, False otherwise
+        """
+        return self.active_movement_command is not None
+
+    def get_active_movement_command(self):
+        """
+        Get the currently active movement command.
+
+        Returns:
+            str: Active movement command or None if no command is active
+        """
+        return self.active_movement_command
+
+    def set_distance_threshold(self, threshold):
+        """
+        Set the distance threshold for task completion detection.
+
+        Args:
+            threshold (float): Distance threshold in meters
+        """
+        if threshold > 0:
+            self.distance_threshold = threshold
+            self.logger.info(f"Distance threshold updated to {threshold}m")
+        else:
+            self.logger.error(f"Invalid distance threshold: {threshold}. Must be positive.")
+
 
 # Manages the overall task logic using a state machine.
 # It integrates sensor processing and health monitoring.
@@ -189,6 +350,8 @@ class TaskLogicNode(Node):
         # Parameters required by SensorProcessor
         self.declare_parameter('pc_range', [-5.0, -5.0, -0.1, 5.0, 5.0, 1.2])
         self.declare_parameter('xy_resolution', 0.1)
+        # Task completion parameters
+        self.declare_parameter('movement_distance_threshold', 1.5)
 
         self.uwb_timeout = self.get_parameter('uwb_timeout').get_parameter_value().double_value
         self.pc_timeout = self.get_parameter('pc_timeout').get_parameter_value().double_value
@@ -196,7 +359,11 @@ class TaskLogicNode(Node):
 
         self.sensor_processor = SensorProcessor(self)
         self.asr_processor = ASRProcessor(self)
+
+        # Get distance threshold parameter and pass to ActionExecutor
+        distance_threshold = self.get_parameter('movement_distance_threshold').get_parameter_value().double_value
         self.action_executor = ActionExecutor(self)
+        self.action_executor.set_distance_threshold(distance_threshold)
 
         self.odom_callback_group = ReentrantCallbackGroup()
 
