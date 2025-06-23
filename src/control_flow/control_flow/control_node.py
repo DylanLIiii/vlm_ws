@@ -30,7 +30,7 @@ class TaskLogicNode(Node):
         self.declare_parameter('topic_lidar', '/lidar_points')
         self.declare_parameter('topic_uwb', '/uwb/data')
         self.declare_parameter('topic_text_command', '/test/command')
-        self.declare_parameter('topic_asr_command', 'asr_command')
+        self.declare_parameter('topic_asr_command', '/asr_command')
         self.declare_parameter('topic_odom', '/rt/odom')
         self.declare_parameter('uwb_timeout', 30.0)
         self.declare_parameter('pc_timeout', 30.0)
