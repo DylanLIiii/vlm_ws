@@ -37,6 +37,7 @@ RUN apt-get update && \
         ros-humble-rosbag2-storage-mcap \
         ros-humble-foxglove-msgs \
         ros-humble-cv-bridge \
+        ros-humble-joy-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install development-specific packages (only for development builds)
