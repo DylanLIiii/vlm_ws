@@ -99,7 +99,6 @@ class TaskLogicNode(Node):
         self.odom_callback_group = ReentrantCallbackGroup()
 
         self.occ_map_dimension = int((self.pc_range[3] - self.pc_range[0]) / self.xy_resolution)
-        pc_callback_group = MutuallyExclusiveCallbackGroup()
         self.point_cloud_sub = self.create_subscription(
             PointCloud2, self.get_parameter('topic_lidar').get_parameter_value().string_value, self.pc_callback, 1, callback_group=self.odom_callback_group
         )
@@ -506,4 +505,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
