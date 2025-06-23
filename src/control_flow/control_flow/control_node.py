@@ -9,10 +9,161 @@ from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from uwb_location.msg import UWB
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Joy
 
 from vita_agent.processors.sensor_processor import SensorProcessor
 from vita_agent.processors.asr_processor import ASRProcessor
+
+
+class ActionExecutor:
+    """
+    Handles the execution of mapped commands by publishing appropriate ROS2 messages.
+
+    This class takes mapped commands from the ASRProcessor and executes them by publishing
+    Joy messages for robot control and String messages for following commands.
+    """
+
+    def __init__(self, node):
+        """
+        Initialize the ActionExecutor.
+
+        Args:
+            node: ROS2 node instance for publishing and logging
+        """
+        self.node = node
+        self.logger = node.get_logger()
+
+        # Create publishers for different command types
+        self.joy_publisher = self.node.create_publisher(Joy, '/joy', 10)
+        self.following_publisher = self.node.create_publisher(String, '/following/task_type', 10)
+
+        # Define command mappings for Joy messages
+        self.joy_commands = {
+            'stand_up': {
+                'buttons': [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                'axes': [0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            },
+            'stand_down': {
+                'buttons': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+                'axes': [0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            },
+            'shake_hand': {
+                'buttons': [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                'axes': [0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            },
+            'enter_rl_mode': {
+                'buttons': [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+                'axes': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            }
+        }
+
+        # Define command mappings for following commands
+        self.following_commands = {
+            'follow_start': 'start following',
+            'follow_stop': 'stop following'
+        }
+
+        self.logger.info("ActionExecutor initialized")
+        self.logger.info(f"Joy commands available: {list(self.joy_commands.keys())}")
+        self.logger.info(f"Following commands available: {list(self.following_commands.keys())}")
+
+    def execute_action(self, mapped_command):
+        """
+        Execute an action based on the mapped command.
+
+        Args:
+            mapped_command (str): The mapped command from ASRProcessor
+
+        Returns:
+            bool: True if action was executed successfully, False otherwise
+        """
+        if not isinstance(mapped_command, str):
+            self.logger.error(f"Invalid mapped command type: {type(mapped_command)}")
+            return False
+
+        # Check if it's a Joy command
+        if mapped_command in self.joy_commands:
+            return self._publish_joy_command(mapped_command)
+
+        # Check if it's a following command
+        elif mapped_command in self.following_commands:
+            return self._publish_following_command(mapped_command)
+
+        else:
+            # For movement commands like "Come Here", "Come to my front", etc.
+            # These are handled by the existing task logic, so we just log and return True
+            self.logger.info(f"Movement command '{mapped_command}' will be handled by task logic")
+            return True
+
+    def _publish_joy_command(self, command):
+        """
+        Publish a Joy message for robot control commands.
+
+        Args:
+            command (str): The command to execute
+
+        Returns:
+            bool: True if published successfully, False otherwise
+        """
+        try:
+            if command not in self.joy_commands:
+                self.logger.error(f"Unknown Joy command: {command}")
+                return False
+
+            # Create Joy message
+            joy_msg = Joy()
+            joy_msg.header.stamp = self.node.get_clock().now().to_msg()
+            joy_msg.header.frame_id = "joy"
+
+            # Set buttons and axes from mapping
+            joy_msg.buttons = self.joy_commands[command]['buttons']
+            joy_msg.axes = self.joy_commands[command]['axes']
+
+            # Publish the message
+            self.joy_publisher.publish(joy_msg)
+            self.logger.info(f"Published Joy command for '{command}': buttons={joy_msg.buttons}, axes={joy_msg.axes}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error publishing Joy command '{command}': {e}")
+            return False
+
+    def _publish_following_command(self, command):
+        """
+        Publish a String message for following commands.
+
+        Args:
+            command (str): The command to execute
+
+        Returns:
+            bool: True if published successfully, False otherwise
+        """
+        try:
+            if command not in self.following_commands:
+                self.logger.error(f"Unknown following command: {command}")
+                return False
+
+            # Create String message
+            string_msg = String()
+            string_msg.data = self.following_commands[command]
+
+            # Publish the message
+            self.following_publisher.publish(string_msg)
+            self.logger.info(f"Published following command for '{command}': '{string_msg.data}'")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error publishing following command '{command}': {e}")
+            return False
+
+    def enter_rl_mode(self):
+        """
+        Special method to enter RL mode by publishing the appropriate Joy command.
+
+        Returns:
+            bool: True if published successfully, False otherwise
+        """
+        return self._publish_joy_command('enter_rl_mode')
 
 
 # Manages the overall task logic using a state machine.
@@ -45,6 +196,7 @@ class TaskLogicNode(Node):
 
         self.sensor_processor = SensorProcessor(self)
         self.asr_processor = ASRProcessor(self)
+        self.action_executor = ActionExecutor(self)
 
         self.odom_callback_group = ReentrantCallbackGroup()
 
@@ -105,7 +257,7 @@ class TaskLogicNode(Node):
             self.get_logger().info(f"Text command received: '{self.text_data}'")
 
     def asr_callback(self, asr_msg):
-        """Callback for ASR commands - maps ASR commands to control commands"""
+        """Callback for ASR commands - maps ASR commands to control commands and executes actions"""
         if asr_msg and asr_msg.data:
             asr_command = asr_msg.data.strip()
             self.get_logger().info(f"ASR command received: '{asr_command}'")
@@ -117,6 +269,13 @@ class TaskLogicNode(Node):
                 # Store the mapped command as text data for task logic
                 self.text_data = mapped_command
                 self.get_logger().info(f"ASR command mapped and stored: '{mapped_command}'")
+
+                # Execute the action using ActionExecutor
+                action_success = self.action_executor.execute_action(mapped_command)
+                if action_success:
+                    self.get_logger().info(f"Action executed successfully for command: '{mapped_command}'")
+                else:
+                    self.get_logger().warn(f"Action execution failed for command: '{mapped_command}'")
             else:
                 self.get_logger().warn(f"ASR command could not be mapped: '{asr_command}'")
 

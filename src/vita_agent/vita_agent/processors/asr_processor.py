@@ -39,9 +39,9 @@ class ASRProcessor:
             'move_to_master_right': 'Come to my right',
             'follow_start': 'follow_start',
             'follow_stop': 'follow_stop',
-            'stand_up': 'stand_up',
-            'stand_down': 'stand_down',
-            'shake_hand': 'shake_hand'
+            'action_stand': 'stand_up',
+            'action_sit': 'stand_down',
+            'action_shakehands': 'shake_hand'
         }
 
         self.logger.info(f"ASRProcessor initialized with {len(self.command_mappings)} command mappings")
