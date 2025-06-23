@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            "control_node = control_flow.control_node:main"
         ],
     },
 )
