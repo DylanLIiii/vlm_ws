@@ -8,20 +8,31 @@ from sensor_msgs.msg import Joy
 
 
 class TaskState(Enum):
-    """State machine for task execution with automatic state management"""
+    """State machine for task execution with persistent RL state management"""
     IDLE = auto()
-    ENTERING_RL_MODE = auto()
+    RL_MODE = auto()
     EXECUTING_TASK = auto()
     COMPLETING_TASK = auto()
     RECOVERING_STANCE = auto()
 
 
+class RLState(Enum):
+    """Robot's current operational mode state"""
+    RL_MODE = auto()      # Robot is in reinforcement learning mode
+    STANDING = auto()     # Robot is standing (non-RL mode)
+    SITTING = auto()      # Robot is sitting down (non-RL mode)
+    SHAKING_HANDS = auto() # Robot is performing handshake (non-RL mode)
+
+
 class ActionExecutor:
     """
-    Handles the execution of mapped commands by publishing appropriate ROS2 messages.
+    Handles the execution of mapped commands with persistent RL state management.
 
     This class takes mapped commands from the ASRProcessor and executes them by publishing
-    Joy messages for robot control and String messages for following commands.
+    Joy messages for robot control and String messages for following commands. It implements
+    persistent RL state management where the robot maintains its RL mode continuously instead
+    of entering/exiting RL mode for each task, only switching states when necessary for
+    specific interrupting actions (stand_up, shake_hand, stand_down).
     """
 
     def __init__(self, node):
@@ -77,6 +88,10 @@ class ActionExecutor:
         self.active_movement_command = None
         self.movement_command_start_time = None
 
+        # Follow command tracking
+        self.active_follow_command = None
+        self.follow_command_start_time = None
+
         # Task completion parameters
         self.distance_threshold = 1.5  # meters - configurable threshold for task completion
         self.last_task_status = None
@@ -87,20 +102,31 @@ class ActionExecutor:
         self.current_task_command = None
         self.state_start_time = None
 
-        # Commands that require RL mode entry before execution
+        # Persistent RL state management
+        self.current_rl_state = RLState.STANDING  # Robot starts in standing mode
+        self.rl_state_initialized = False  # Track if RL mode has been initialized
+
+        # Commands that require RL mode for execution
         self.rl_mode_required_commands = {
             'follow_start', 'Come Here', 'Come to my front',
             'Come to my behind/back', 'Come to my left', 'Come to my right'
         }
 
-        # Commands that require standing recovery after execution
-        self.standing_recovery_commands = {
-            'follow_stop'  # Removed 'shake_hand' as it automatically returns to standing
+        # Commands that interrupt RL mode and transition to non-RL states
+        self.rl_interrupting_commands = {
+            'stand_up': RLState.STANDING,
+            'stand_down': RLState.SITTING,
+            'shake_hand': RLState.SHAKING_HANDS
         }
 
-        # Movement commands that require standing recovery after completion
-        self.movement_commands_with_recovery = {
-            'Come Here', 'Come to my front', 'Come to my behind/back',
+        # Commands that require standing recovery after execution (deprecated - will be removed)
+        self.standing_recovery_commands = {
+            'follow_stop'  # Only follow_stop for backward compatibility
+        }
+
+        # RL-based commands that stay in RL mode after completion (no standing recovery)
+        self.rl_commands_stay_in_rl = {
+            'follow_start', 'Come Here', 'Come to my front', 'Come to my behind/back',
             'Come to my left', 'Come to my right'
         }
 
@@ -115,30 +141,48 @@ class ActionExecutor:
             'stand_up', 'stand_down', 'enter_rl_mode', 'shake_hand', 'follow_stop'
         }
 
+        # Commands with explicit status monitoring (completion determined via /task_status topic)
+        self.status_monitored_commands = {
+            'follow_start',  # Monitored via task status updates
+            'Come Here', 'Come to my front', 'Come to my behind/back',
+            'Come to my left', 'Come to my right'  # Monitored via movement tracking
+        }
+
+        # Commands without status monitoring (rely on timeout-based completion)
+        self.timeout_based_commands = {
+            'stand_up', 'stand_down', 'shake_hand', 'enter_rl_mode', 'follow_stop'
+        }
+
         # State transition timeouts (in seconds)
+        # To check after how long we should determine the no feedback task has been completed.
         self.rl_mode_timeout = 3.0
-        self.task_execution_timeout = 2.0
+        self.task_execution_timeout = 5.0
         self.recovery_timeout = 3.0
 
-        self.logger.info("ActionExecutor initialized with automatic state management and task interruption")
+        self.logger.info("ActionExecutor initialized with persistent RL state management and task interruption")
+        self.logger.info(f"Initial RL state: {self.current_rl_state.name}")
         self.logger.info(f"Joy commands available: {list(self.joy_commands.keys())}")
         self.logger.info(f"Following commands available: {list(self.following_commands.keys())}")
         self.logger.info(f"Movement commands monitored: {list(self.movement_commands)}")
         self.logger.info(f"RL mode required for: {list(self.rl_mode_required_commands)}")
-        self.logger.info(f"Standing recovery after: {list(self.standing_recovery_commands)}")
+        self.logger.info(f"RL interrupting commands: {list(self.rl_interrupting_commands.keys())}")
+        self.logger.info(f"RL commands (stay in RL mode): {list(self.rl_commands_stay_in_rl)}")
         self.logger.info(f"Interruptible tasks: {list(self.interruptible_tasks)}")
         self.logger.info(f"Non-interruptible tasks: {list(self.non_interruptible_tasks)}")
+        self.logger.info(f"Status monitored commands: {list(self.status_monitored_commands)}")
+        self.logger.info(f"Timeout-based commands: {list(self.timeout_based_commands)}")
         self.logger.info(f"Task status monitoring enabled on /task_status topic")
 
     def execute_action(self, mapped_command):
         """
-        Execute an action with automatic state management and task interruption.
+        Execute an action with persistent RL state management and task interruption.
 
         This method implements a state machine that automatically handles:
         1. Task interruption for long-term interruptible tasks
-        2. Pre-task RL mode entry for navigation commands
-        3. Task execution
-        4. Post-task standing recovery
+        2. Persistent RL mode management (enter RL mode only when needed, stay in RL mode)
+        3. RL mode interruption for specific commands (stand_up, shake_hand, stand_down)
+        4. Task execution with state awareness
+        5. Proper state transitions based on current RL state
 
         Args:
             mapped_command (str): The mapped command from ASRProcessor
@@ -176,7 +220,7 @@ class ActionExecutor:
             return self._start_task_sequence(new_command)
 
         # Current task is non-interruptible, check if it's a critical state
-        elif self.current_state in [TaskState.ENTERING_RL_MODE, TaskState.RECOVERING_STANCE]:
+        elif self.current_state in [TaskState.RL_MODE, TaskState.RECOVERING_STANCE]:
             # These are short transitions, queue the command
             self.logger.info(f"System in critical state ({self.current_state.name}), queueing command: '{new_command}'")
             self.task_queue.append(new_command)
@@ -203,8 +247,10 @@ class ActionExecutor:
 
         # Handle specific interruption logic based on task type
         if current_task == 'follow_start':
-            # Stop following immediately
+            # Stop following immediately and stop tracking
             self._publish_following_command('follow_stop')
+            if self.active_follow_command:
+                self._stop_follow_command_tracking()
             self.logger.info("Sent stop following command due to task interruption")
 
         elif current_task in self.movement_commands:
@@ -221,7 +267,7 @@ class ActionExecutor:
 
     def _start_task_sequence(self, command):
         """
-        Start the task sequence for a given command with appropriate state transitions.
+        Start the task sequence for a given command with persistent RL state management.
 
         Args:
             command (str): The command to execute
@@ -230,15 +276,28 @@ class ActionExecutor:
             bool: True if sequence started successfully, False otherwise
         """
         self.current_task_command = command
-        self.logger.info(f"Starting task sequence for command: '{command}'")
+        self.logger.info(f"Starting task sequence for command: '{command}' (current RL state: {self.current_rl_state.name})")
 
-        # Determine if this command requires RL mode entry
-        if command in self.rl_mode_required_commands:
-            self.logger.info(f"Command '{command}' requires RL mode - entering RL mode first")
-            return self._transition_to_state(TaskState.ENTERING_RL_MODE)
+        # Handle RL interrupting commands (stand_up, shake_hand, stand_down)
+        if command in self.rl_interrupting_commands:
+            target_rl_state = self.rl_interrupting_commands[command]
+            self.logger.info(f"Command '{command}' interrupts RL mode - transitioning to {target_rl_state.name}")
+            self.current_rl_state = target_rl_state
+            return self._transition_to_state(TaskState.EXECUTING_TASK)
+
+        # Handle commands that require RL mode
+        elif command in self.rl_mode_required_commands:
+            if self.current_rl_state != RLState.RL_MODE:
+                self.logger.info(f"Command '{command}' requires RL mode - transitioning from {self.current_rl_state.name} to RL_MODE")
+                self.current_rl_state = RLState.RL_MODE
+                return self._transition_to_state(TaskState.RL_MODE)
+            else:
+                self.logger.info(f"Command '{command}' requires RL mode - already in RL mode, executing directly")
+                return self._transition_to_state(TaskState.EXECUTING_TASK)
+
+        # Handle other commands (follow_stop, etc.)
         else:
-            # Direct execution for commands that don't need RL mode
-            self.logger.info(f"Command '{command}' executing directly")
+            self.logger.info(f"Command '{command}' executing directly in current state")
             return self._transition_to_state(TaskState.EXECUTING_TASK)
 
     def _transition_to_state(self, new_state):
@@ -258,7 +317,7 @@ class ActionExecutor:
         self.logger.info(f"State transition: {old_state.name} -> {new_state.name}")
 
         # Execute the action for the new state
-        if new_state == TaskState.ENTERING_RL_MODE:
+        if new_state == TaskState.RL_MODE:
             return self._execute_rl_mode_entry()
         elif new_state == TaskState.EXECUTING_TASK:
             return self._execute_current_task()
@@ -289,6 +348,10 @@ class ActionExecutor:
         # Check if it's a following command
         elif command in self.following_commands:
             success = self._publish_following_command(command)
+            # Start tracking for follow_start command
+            if command == 'follow_start':
+                self._start_follow_command_tracking(command)
+                self.logger.info(f"Follow command '{command}' tracking started")
         # Handle movement commands
         elif command in self.movement_commands:
             self._start_movement_command_tracking(command)
@@ -299,21 +362,39 @@ class ActionExecutor:
             self.logger.info(f"Command '{command}' will be handled by task logic")
 
         if success:
-            # Determine next state based on command type
-            if command in self.standing_recovery_commands:
-                # Commands that need immediate standing recovery (only follow_stop now)
-                self.logger.info(f"Command '{command}' requires standing recovery")
-                self.node.create_timer(self.task_execution_timeout, self._on_task_complete_with_recovery)
-            elif command in self.movement_commands_with_recovery:
-                # Movement commands - recovery will be triggered by task completion monitoring
-                self.logger.info(f"Movement command '{command}' - waiting for task completion")
+            # Determine next state based on command type and monitoring capabilities
+            if command in self.status_monitored_commands:
+                # Commands with explicit status monitoring - wait for completion via /task_status topic
+                self.logger.info(f"Status-monitored command '{command}' - waiting for explicit completion signal")
+                # No timeout timer - completion will be handled by task status callback
             elif command == 'shake_hand':
                 # Shake hand automatically returns to standing, no recovery needed
                 self.logger.info(f"Shake hand command executed - robot will automatically return to standing")
                 self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
-            else:
-                # Commands that don't need recovery - go back to idle
+            elif command in self.rl_interrupting_commands:
+                # RL interrupting commands (stand_up, stand_down) - transition to idle after completion
+                self.logger.info(f"RL interrupting command '{command}' executed - will transition to idle")
                 self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+            elif command in self.timeout_based_commands:
+                # Commands without status monitoring - use timeout-based completion
+                if command in self.rl_mode_required_commands:
+                    self.logger.info(f"Timeout-based RL command '{command}' - will stay in RL mode after timeout")
+                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                else:
+                    self.logger.info(f"Timeout-based command '{command}' - will transition based on RL state after timeout")
+                    if self.current_rl_state == RLState.RL_MODE:
+                        self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                    else:
+                        self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+            else:
+                # Fallback for other commands - go back to appropriate state based on RL state
+                self.logger.info(f"Fallback handling for command '{command}' - using timeout-based completion")
+                if self.current_rl_state == RLState.RL_MODE:
+                    self.logger.info(f"Command '{command}' completed - staying in RL mode")
+                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                else:
+                    self.logger.info(f"Command '{command}' completed - returning to idle")
+                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
 
         return success
 
@@ -340,9 +421,15 @@ class ActionExecutor:
 
     def _on_rl_mode_complete(self):
         """Timer callback for RL mode completion."""
-        if self.current_state == TaskState.ENTERING_RL_MODE:
+        if self.current_state == TaskState.RL_MODE:
             self.logger.info("RL mode entry timeout reached - transitioning to task execution")
             self._transition_to_state(TaskState.EXECUTING_TASK)
+
+    def _on_task_complete_stay_rl(self):
+        """Timer callback for task completion that stays in RL mode."""
+        if self.current_state == TaskState.EXECUTING_TASK:
+            self.logger.info("Task execution timeout reached - staying in RL mode")
+            self._transition_to_state(TaskState.RL_MODE)
 
     def _on_task_complete_with_recovery(self):
         """Timer callback for task completion that requires standing recovery."""
@@ -453,6 +540,27 @@ class ActionExecutor:
             self.active_movement_command = None
             self.movement_command_start_time = None
 
+    def _start_follow_command_tracking(self, command):
+        """
+        Start tracking a follow command for completion monitoring.
+
+        Args:
+            command (str): The follow command to track
+        """
+        self.active_follow_command = command
+        self.follow_command_start_time = time.time()
+        self.logger.info(f"Started tracking follow command: '{command}'")
+
+    def _stop_follow_command_tracking(self):
+        """
+        Stop tracking the current follow command.
+        """
+        if self.active_follow_command:
+            duration = time.time() - self.follow_command_start_time if self.follow_command_start_time else 0
+            self.logger.info(f"Stopped tracking follow command: '{self.active_follow_command}' (duration: {duration:.1f}s)")
+            self.active_follow_command = None
+            self.follow_command_start_time = None
+
     def task_status_callback(self, msg):
         """
         Callback for task status updates from /task_status topic.
@@ -468,6 +576,10 @@ class ActionExecutor:
             # Check if we're currently tracking a movement command
             if self.active_movement_command:
                 self._check_movement_task_completion(task_status)
+
+            # Check if we're currently tracking a follow command
+            if self.active_follow_command:
+                self._check_follow_task_completion(task_status)
 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to parse task status JSON: {e}")
@@ -508,6 +620,43 @@ class ActionExecutor:
         except Exception as e:
             self.logger.error(f"Error checking movement task completion: {e}")
 
+    def _check_follow_task_completion(self, task_status):
+        """
+        Check if the current follow task is complete based on task status.
+
+        Args:
+            task_status (dict): Parsed task status information
+        """
+        try:
+            # For follow commands, we can use different completion criteria
+            # For now, we'll use similar logic to movement commands but could be extended
+            current_distance = task_status.get('current_distance_to_target')
+            target_reached = task_status.get('target_reached', False)
+            system_state = task_status.get('system_state', '')
+
+            # Log task status for debugging
+            if current_distance is not None:
+                self.logger.debug(f"Follow task status - Distance: {current_distance:.2f}m, Target reached: {target_reached}, State: {system_state}")
+
+            # Check completion conditions for follow commands
+            # Follow commands might complete based on different criteria than movement commands
+            task_complete = False
+            completion_reason = ""
+
+            # For follow_start, we might want to check if the following has been explicitly stopped
+            # or if a specific condition is met
+            if target_reached:
+                task_complete = True
+                completion_reason = "target_reached flag is True"
+            # Add other follow-specific completion criteria here as needed
+
+            if task_complete:
+                self.logger.info(f"Follow task '{self.active_follow_command}' completed: {completion_reason}")
+                self._handle_follow_task_completion()
+
+        except Exception as e:
+            self.logger.error(f"Error checking follow task completion: {e}")
+
     def _handle_movement_task_completion(self):
         """
         Handle the completion of a movement task with automatic state management.
@@ -523,23 +672,51 @@ class ActionExecutor:
             if stop_success:
                 self.logger.info(f"Automatically stopped following after completing movement task: '{completed_command}'")
 
-                # If this was a movement command that requires standing recovery, transition to recovery
-                if completed_command in self.movement_commands_with_recovery and self.current_state == TaskState.EXECUTING_TASK:
-                    self.logger.info(f"Movement task '{completed_command}' completed - transitioning to standing recovery")
-                    self._transition_to_state(TaskState.RECOVERING_STANCE)
+                # RL-based commands stay in RL mode after completion (no standing recovery)
+                if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
+                    self.logger.info(f"RL-based task '{completed_command}' completed - staying in RL mode")
+                    self._transition_to_state(TaskState.RL_MODE)
                 else:
                     self.logger.info(f"Movement task '{completed_command}' completed - transitioning to idle")
                     self._transition_to_state(TaskState.IDLE)
             else:
                 self.logger.warn(f"Failed to automatically stop following after completing movement task: '{completed_command}'")
-                # Even if stop following failed, still transition to recovery/idle
-                if completed_command in self.movement_commands_with_recovery and self.current_state == TaskState.EXECUTING_TASK:
-                    self._transition_to_state(TaskState.RECOVERING_STANCE)
+                # Even if stop following failed, still transition based on RL state
+                if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
+                    self._transition_to_state(TaskState.RL_MODE)
                 else:
                     self._transition_to_state(TaskState.IDLE)
 
         except Exception as e:
             self.logger.error(f"Error handling movement task completion: {e}")
+
+    def _handle_follow_task_completion(self):
+        """
+        Handle the completion of a follow task with automatic state management.
+        """
+        try:
+            # Stop tracking the follow command
+            completed_command = self.active_follow_command
+            self._stop_follow_command_tracking()
+
+            # For follow_start, we might want to automatically stop following
+            if completed_command == 'follow_start':
+                stop_success = self._publish_following_command('follow_stop')
+                if stop_success:
+                    self.logger.info(f"Automatically stopped following after completing follow task: '{completed_command}'")
+                else:
+                    self.logger.warn(f"Failed to automatically stop following after completing follow task: '{completed_command}'")
+
+            # Follow commands stay in RL mode after completion (persistent RL state management)
+            if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
+                self.logger.info(f"Follow task '{completed_command}' completed - staying in RL mode")
+                self._transition_to_state(TaskState.RL_MODE)
+            else:
+                self.logger.info(f"Follow task '{completed_command}' completed - transitioning to idle")
+                self._transition_to_state(TaskState.IDLE)
+
+        except Exception as e:
+            self.logger.error(f"Error handling follow task completion: {e}")
 
     def get_task_status(self):
         """
@@ -567,6 +744,24 @@ class ActionExecutor:
             str: Active movement command or None if no command is active
         """
         return self.active_movement_command
+
+    def is_follow_command_active(self):
+        """
+        Check if a follow command is currently being tracked.
+
+        Returns:
+            bool: True if a follow command is active, False otherwise
+        """
+        return self.active_follow_command is not None
+
+    def get_active_follow_command(self):
+        """
+        Get the currently active follow command.
+
+        Returns:
+            str: Active follow command or None if no command is active
+        """
+        return self.active_follow_command
 
     def set_distance_threshold(self, threshold):
         """
@@ -669,4 +864,74 @@ class ActionExecutor:
         self.current_task_command = None
         self.state_start_time = None
         self._stop_movement_command_tracking()
+        self._stop_follow_command_tracking()
         self.clear_command_queue()
+
+    def get_current_rl_state(self):
+        """
+        Get the current RL state of the robot.
+
+        Returns:
+            RLState: Current RL state (RL_MODE, STANDING, SITTING, SHAKING_HANDS)
+        """
+        return self.current_rl_state
+
+    def is_in_rl_mode(self):
+        """
+        Check if the robot is currently in RL mode.
+
+        Returns:
+            bool: True if in RL mode, False if in non-RL mode
+        """
+        return self.current_rl_state == RLState.RL_MODE
+
+    def is_in_non_rl_mode(self):
+        """
+        Check if the robot is currently in a non-RL mode (standing, sitting, shaking hands).
+
+        Returns:
+            bool: True if in non-RL mode, False if in RL mode
+        """
+        return self.current_rl_state != RLState.RL_MODE
+
+    def get_rl_state_name(self):
+        """
+        Get the human-readable name of the current RL state.
+
+        Returns:
+            str: Name of the current RL state
+        """
+        return self.current_rl_state.name
+
+    def set_rl_state(self, rl_state):
+        """
+        Manually set the RL state. Use with caution.
+
+        Args:
+            rl_state (RLState): The RL state to set
+        """
+        if isinstance(rl_state, RLState):
+            old_state = self.current_rl_state
+            self.current_rl_state = rl_state
+            self.logger.info(f"RL state manually changed: {old_state.name} -> {rl_state.name}")
+        else:
+            self.logger.error(f"Invalid RL state type: {type(rl_state)}")
+
+    def get_state_summary(self):
+        """
+        Get a comprehensive summary of the current state.
+
+        Returns:
+            dict: Dictionary containing current task state, RL state, and other status info
+        """
+        return {
+            'task_state': self.current_state.name,
+            'rl_state': self.current_rl_state.name,
+            'current_task': self.current_task_command,
+            'is_busy': self.is_busy(),
+            'is_in_rl_mode': self.is_in_rl_mode(),
+            'active_movement_command': self.active_movement_command,
+            'active_follow_command': self.active_follow_command,
+            'queued_commands_count': len(self.task_queue),
+            'state_duration': self.get_state_duration()
+        }

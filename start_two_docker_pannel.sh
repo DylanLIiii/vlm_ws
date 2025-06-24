@@ -11,7 +11,7 @@ tmux split-window -v -t docker_session:0.1       # Split right pane vertically (
 
 # Start an empty docker shell in each panel
 for i in 0 1 2 3; do
-    tmux send-keys -t docker_session:0.$i 'cd .devcontainer && docker compose -f compose.multi-arch.yml run --rm deploy_vlm' Enter
+    tmux send-keys -t docker_session:0.$i 'make deploy-run-arm64' Enter
 done
 
 # Attach to the session
