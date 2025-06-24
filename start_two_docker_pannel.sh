@@ -1,6 +1,8 @@
 #!/bin/bash
 # filepath: /root/vlm_ws/start_two_docker_pannel.sh
 
+make deploy-up-arm64
+
 # Create a new tmux session with 4 panels in one window
 tmux new-session -d -s docker_session
 
@@ -11,7 +13,7 @@ tmux split-window -v -t docker_session:0.1       # Split right pane vertically (
 
 # Start an empty docker shell in each panel
 for i in 0 1 2 3; do
-    tmux send-keys -t docker_session:0.$i 'make deploy-run-arm64' Enter
+    tmux send-keys -t docker_session:0.$i 'make deploy-shell-arm64' Enter
 done
 
 # Attach to the session

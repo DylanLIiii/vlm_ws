@@ -41,10 +41,10 @@ help: ## Show this help message
 
 # Setup and cleanup
 .PHONY: setup
-setup: ## Setup Docker buildx for multi-architecture builds
+setup: ## Setup Docker buildx for multi-architecture builds | To build without network as host. I think it can works. Just remove --driver-opt network host
 	$(call print_info,"Setting up Docker buildx...")
 	@echo '[registry."192.168.31.199:8000"]\n  http = true\n  insecure = true' > buildkitd.toml
-	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml 2>/dev/null || \
+	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml --driver-opt network=host 2>/dev/null || \
 		docker buildx use $(BUILDER_NAME) 2>/dev/null || true
 	@docker buildx inspect --bootstrap
 	$(call print_success,"Buildx setup completed")
@@ -54,7 +54,7 @@ force-setup: ## Force remove and recreate Docker buildx builder
 	$(call print_info,"Forcing buildx setup...")
 	@docker buildx rm $(BUILDER_NAME) 2>/dev/null || true
 	@echo '[registry."192.168.31.199:8000"]\n  http = true\n  insecure = true' > buildkitd.toml
-	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml
+	@docker buildx create --name $(BUILDER_NAME) --driver docker-container --use --config buildkitd.toml --driver-opt network=host
 	@docker buildx inspect --bootstrap
 	$(call print_success,"Buildx force setup completed")
 
@@ -111,9 +111,8 @@ deploy-build-amd64: setup ## Build deployment image for AMD64
 		--build-arg BUILD_TYPE=deployment \
 		--build-arg TARGETARCH=amd64 \
 		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG)-amd64 \
-		--push \
 		.
-	$(call print_success,"AMD64 deployment image built and pushed")
+	$(call print_success,"AMD64 deployment image built")
 
 .PHONY: deploy-build-arm64
 deploy-build-arm64: setup ## Build deployment image for ARM64
@@ -124,9 +123,8 @@ deploy-build-arm64: setup ## Build deployment image for ARM64
 		--build-arg BUILD_TYPE=deployment \
 		--build-arg TARGETARCH=arm64 \
 		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG)-arm64 \
-		--push \
 		.
-	$(call print_success,"ARM64 deployment image built and pushed")
+	$(call print_success,"ARM64 deployment image built")
 
 .PHONY: deploy-build-multiarch
 deploy-build-multiarch: setup ## Build multi-architecture deployment image
@@ -136,9 +134,12 @@ deploy-build-multiarch: setup ## Build multi-architecture deployment image
 		--platform linux/amd64,linux/arm64 \
 		--build-arg BUILD_TYPE=deployment \
 		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG) \
-		--push \
 		.
-	$(call print_success,"Multi-architecture deployment image built and pushed")
+	$(call print_success,"Multi-architecture deployment image built")
+
+.PHONY: deploy-shell-arm64
+deploy-shell-arm64: ## Get shell in development container
+	@docker compose exec deploy-arm64 bash
 
 # Deployment container management
 .PHONY: deploy-run-amd64

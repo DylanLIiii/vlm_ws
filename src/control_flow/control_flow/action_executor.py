@@ -1,5 +1,6 @@
 import time
 import json
+import threading
 from enum import Enum, auto
 from collections import deque
 
@@ -77,7 +78,7 @@ class ActionExecutor:
 
         # Task status monitoring setup
         self.task_status_subscriber = self.node.create_subscription(
-            String, '/task_status', self.task_status_callback, 10
+            String, '/task_status', self.task_status_callback, 1
         )
 
         # Movement command tracking
@@ -91,6 +92,10 @@ class ActionExecutor:
         # Follow command tracking
         self.active_follow_command = None
         self.follow_command_start_time = None
+
+        # Countdown management to prevent multiple countdowns from running
+        self.active_countdown_thread = None
+        self.countdown_cancelled = False
 
         # Task completion parameters
         self.distance_threshold = 1.5  # meters - configurable threshold for task completion
@@ -121,7 +126,7 @@ class ActionExecutor:
 
         # Commands that require standing recovery after execution (deprecated - will be removed)
         self.standing_recovery_commands = {
-            'follow_stop'  # Only follow_stop for backward compatibility
+            # follow_stop removed - it should transition to idle, not require standing recovery
         }
 
         # RL-based commands that stay in RL mode after completion (no standing recovery)
@@ -155,7 +160,7 @@ class ActionExecutor:
 
         # State transition timeouts (in seconds)
         # To check after how long we should determine the no feedback task has been completed.
-        self.rl_mode_timeout = 3.0
+        self.rl_mode_timeout = 1.5
         self.task_execution_timeout = 5.0
         self.recovery_timeout = 3.0
 
@@ -335,12 +340,18 @@ class ActionExecutor:
         if success:
             self.logger.info("RL mode entry initiated - will transition to task execution")
             # Schedule transition to task execution after a delay
-            self.node.create_timer(self.rl_mode_timeout, self._on_rl_mode_complete)
+            self._create_countdown(self.rl_mode_timeout, self._on_rl_mode_complete)
         return success
 
     def _execute_current_task(self):
         """Execute the current task command."""
         command = self.current_task_command
+
+        # Handle case where task command is None (task already completed)
+        if command is None:
+            self.logger.info("No current task command - transitioning to idle")
+            self._transition_to_state(TaskState.IDLE)
+            return True
 
         # Check if it's a Joy command
         if command in self.joy_commands:
@@ -360,41 +371,50 @@ class ActionExecutor:
         else:
             success = True
             self.logger.info(f"Command '{command}' will be handled by task logic")
-
         if success:
             # Determine next state based on command type and monitoring capabilities
             if command in self.status_monitored_commands:
                 # Commands with explicit status monitoring - wait for completion via /task_status topic
-                self.logger.info(f"Status-monitored command '{command}' - waiting for explicit completion signal")
-                # No timeout timer - completion will be handled by task status callback
+                self._cancel_active_countdown()
+                self.logger.info(f"Status-monitored command '{command}' - waiting for explicit completion signal")  
+                # No timeout timer or ignore previout timer - completion will be handled by task status callback
+                
             elif command == 'shake_hand':
                 # Shake hand automatically returns to standing, no recovery needed
                 self.logger.info(f"Shake hand command executed - robot will automatically return to standing")
-                self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+                self._create_countdown(self.task_execution_timeout, self._on_task_complete_no_recovery)
             elif command in self.rl_interrupting_commands:
                 # RL interrupting commands (stand_up, stand_down) - transition to idle after completion
                 self.logger.info(f"RL interrupting command '{command}' executed - will transition to idle")
-                self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+                self._create_countdown(self.task_execution_timeout, self._on_task_complete_no_recovery)
             elif command in self.timeout_based_commands:
                 # Commands without status monitoring - use timeout-based completion
                 if command in self.rl_mode_required_commands:
                     self.logger.info(f"Timeout-based RL command '{command}' - will stay in RL mode after timeout")
-                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                    self._create_countdown(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                elif command == 'follow_stop':
+                    # follow_stop should always transition to idle, regardless of current RL state
+                    self.logger.info(f"Follow stop command '{command}' - will transition to idle after timeout")
+                    self._create_countdown(self.task_execution_timeout, self._on_task_complete_no_recovery)
+                elif command in self.standing_recovery_commands:
+                    # Commands that require standing recovery
+                    self.logger.info(f"Timeout-based command '{command}' - will transition to standing recovery after timeout")
+                    self._create_countdown(self.task_execution_timeout, self._on_task_complete_with_recovery)
                 else:
                     self.logger.info(f"Timeout-based command '{command}' - will transition based on RL state after timeout")
                     if self.current_rl_state == RLState.RL_MODE:
-                        self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                        self._create_countdown(self.task_execution_timeout, self._on_task_complete_stay_rl)
                     else:
-                        self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+                        self._create_countdown(self.task_execution_timeout, self._on_task_complete_no_recovery)
             else:
                 # Fallback for other commands - go back to appropriate state based on RL state
                 self.logger.info(f"Fallback handling for command '{command}' - using timeout-based completion")
                 if self.current_rl_state == RLState.RL_MODE:
                     self.logger.info(f"Command '{command}' completed - staying in RL mode")
-                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_stay_rl)
+                    self._create_countdown(self.task_execution_timeout, self._on_task_complete_stay_rl)
                 else:
                     self.logger.info(f"Command '{command}' completed - returning to idle")
-                    self.node.create_timer(self.task_execution_timeout, self._on_task_complete_no_recovery)
+                    self._create_countdown(self.task_execution_timeout, self._on_task_complete_no_recovery)
 
         return success
 
@@ -403,7 +423,7 @@ class ActionExecutor:
         success = self._publish_joy_command('stand_up')
         if success:
             self.logger.info("Standing recovery initiated - will transition to idle")
-            self.node.create_timer(self.recovery_timeout, self._on_recovery_complete)
+            self._create_countdown(self.recovery_timeout, self._on_recovery_complete)
         return success
 
     def _execute_idle_transition(self):
@@ -420,31 +440,36 @@ class ActionExecutor:
         return True
 
     def _on_rl_mode_complete(self):
-        """Timer callback for RL mode completion."""
+        """Countdown callback for RL mode completion."""
+        self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.RL_MODE:
             self.logger.info("RL mode entry timeout reached - transitioning to task execution")
             self._transition_to_state(TaskState.EXECUTING_TASK)
 
     def _on_task_complete_stay_rl(self):
-        """Timer callback for task completion that stays in RL mode."""
+        """Countdown callback for task completion that stays in RL mode."""
+        self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.EXECUTING_TASK:
             self.logger.info("Task execution timeout reached - staying in RL mode")
             self._transition_to_state(TaskState.RL_MODE)
 
     def _on_task_complete_with_recovery(self):
-        """Timer callback for task completion that requires standing recovery."""
+        """Countdown callback for task completion that requires standing recovery."""
+        self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.EXECUTING_TASK:
             self.logger.info("Task execution timeout reached - transitioning to standing recovery")
             self._transition_to_state(TaskState.RECOVERING_STANCE)
 
     def _on_task_complete_no_recovery(self):
-        """Timer callback for task completion that doesn't require recovery."""
+        """Countdown callback for task completion that doesn't require recovery."""
+        self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.EXECUTING_TASK:
             self.logger.info("Task execution timeout reached - transitioning to idle")
             self._transition_to_state(TaskState.IDLE)
 
     def _on_recovery_complete(self):
-        """Timer callback for standing recovery completion."""
+        """Countdown callback for standing recovery completion."""
+        self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.RECOVERING_STANCE:
             self.logger.info("Standing recovery timeout reached - transitioning to idle")
             self._transition_to_state(TaskState.IDLE)
@@ -561,6 +586,56 @@ class ActionExecutor:
             self.active_follow_command = None
             self.follow_command_start_time = None
 
+    def _cancel_active_countdown(self):
+        """
+        Cancel the currently active countdown to prevent multiple countdowns from running.
+        """
+        if self.active_countdown_thread is not None:
+            try:
+                self.countdown_cancelled = True
+                self.logger.debug("Cancelled previous countdown")
+            except Exception as e:
+                self.logger.debug(f"Error cancelling countdown: {e}")
+            finally:
+                self.active_countdown_thread = None
+
+    def _countdown_worker(self, timeout, callback):
+        """
+        Worker function that performs the countdown in a separate thread.
+
+        Args:
+            timeout (float): Countdown timeout in seconds
+            callback: Callback function to execute when countdown completes
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.countdown_cancelled:
+                self.logger.debug("Countdown was cancelled")
+                return
+            time.sleep(0.1)  # Check every 100ms for cancellation
+
+        # If we reach here, countdown completed without cancellation
+        if not self.countdown_cancelled:
+            callback()
+
+    def _create_countdown(self, timeout, callback):
+        """
+        Create a new countdown, cancelling any existing countdown first.
+
+        Args:
+            timeout (float): Countdown timeout in seconds
+            callback: Callback function to execute when countdown completes
+        """
+        self._cancel_active_countdown()
+        self.countdown_cancelled = False
+        self.active_countdown_thread = threading.Thread(
+            target=self._countdown_worker,
+            args=(timeout, callback),
+            daemon=True
+        )
+        self.active_countdown_thread.start()
+        return self.active_countdown_thread
+
     def task_status_callback(self, msg):
         """
         Callback for task status updates from /task_status topic.
@@ -595,7 +670,7 @@ class ActionExecutor:
         """
         try:
             # Extract required fields from task status
-            current_distance = task_status.get('current_distance_to_target')
+            current_distance = task_status.get('distance_to_target')
             target_reached = task_status.get('target_reached', False)
 
             # Log task status for debugging
@@ -630,7 +705,7 @@ class ActionExecutor:
         try:
             # For follow commands, we can use different completion criteria
             # For now, we'll use similar logic to movement commands but could be extended
-            current_distance = task_status.get('current_distance_to_target')
+            current_distance = task_status.get('distance_to_target')
             target_reached = task_status.get('target_reached', False)
             system_state = task_status.get('system_state', '')
 
@@ -646,8 +721,8 @@ class ActionExecutor:
             # For follow_start, we might want to check if the following has been explicitly stopped
             # or if a specific condition is met
             if target_reached:
-                task_complete = True
-                completion_reason = "target_reached flag is True"
+                task_complete = False
+                self.logger.info(f"Currently Reached the target. Staying there but donot terminate following process.")
             # Add other follow-specific completion criteria here as needed
 
             if task_complete:
@@ -662,9 +737,15 @@ class ActionExecutor:
         Handle the completion of a movement task with automatic state management.
         """
         try:
+            # Cancel any active countdown since we're completing via status monitoring
+            self._cancel_active_countdown()
+
             # Stop tracking the movement command
             completed_command = self.active_movement_command
             self._stop_movement_command_tracking()
+
+            # Clear the current task command to prevent re-execution
+            self.current_task_command = None
 
             # Automatically publish stop following command
             stop_success = self._publish_following_command('follow_stop')
@@ -695,9 +776,15 @@ class ActionExecutor:
         Handle the completion of a follow task with automatic state management.
         """
         try:
+            # Cancel any active countdown since we're completing via status monitoring
+            self._cancel_active_countdown()
+
             # Stop tracking the follow command
             completed_command = self.active_follow_command
             self._stop_follow_command_tracking()
+
+            # Clear the current task command to prevent re-execution
+            self.current_task_command = None
 
             # For follow_start, we might want to automatically stop following
             if completed_command == 'follow_start':
@@ -865,6 +952,7 @@ class ActionExecutor:
         self.state_start_time = None
         self._stop_movement_command_tracking()
         self._stop_follow_command_tracking()
+        self._cancel_active_countdown()
         self.clear_command_queue()
 
     def get_current_rl_state(self):
