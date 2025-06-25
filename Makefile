@@ -3,7 +3,7 @@
 
 # Configuration
 REGISTRY ?= 192.168.31.199:8000
-IMAGE_NAME ?= vlm_ws
+IMAGE_NAME ?= algo/deploy_vlm
 TAG ?= latest
 USER_ID ?= $(shell id -u)
 GROUP_ID ?= $(shell id -g)
@@ -137,6 +137,45 @@ deploy-build-multiarch: setup ## Build multi-architecture deployment image
 		.
 	$(call print_success,"Multi-architecture deployment image built")
 
+# Push targets
+.PHONY: push-amd64
+push-amd64: deploy-build-amd64 ## Build and push AMD64 deployment image
+	$(call print_info,"Pushing AMD64 deployment image...")
+	@docker buildx build \
+		--builder $(BUILDER_NAME) \
+		--platform linux/amd64 \
+		--build-arg BUILD_TYPE=deployment \
+		--build-arg TARGETARCH=amd64 \
+		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG)-amd64 \
+		--push \
+		.
+	$(call print_success,"AMD64 deployment image pushed to registry")
+
+.PHONY: push-arm64
+push-arm64: deploy-build-arm64 ## Build and push ARM64 deployment image
+	$(call print_info,"Pushing ARM64 deployment image...")
+	@docker buildx build \
+		--builder $(BUILDER_NAME) \
+		--platform linux/arm64 \
+		--build-arg BUILD_TYPE=deployment \
+		--build-arg TARGETARCH=arm64 \
+		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG)-arm64 \
+		--push \
+		.
+	$(call print_success,"ARM64 deployment image pushed to registry")
+
+.PHONY: push-multiarch
+push-multiarch: setup ## Build and push multi-architecture deployment image
+	$(call print_info,"Building and pushing multi-architecture deployment image...")
+	@docker buildx build \
+		--builder $(BUILDER_NAME) \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg BUILD_TYPE=deployment \
+		-t $(REGISTRY)/$(IMAGE_NAME):$(TAG) \
+		--push \
+		.
+	$(call print_success,"Multi-architecture deployment image pushed to registry")
+
 .PHONY: deploy-shell-arm64
 deploy-shell-arm64: ## Get shell in development container
 	@docker compose exec deploy-arm64 bash
@@ -159,6 +198,18 @@ deploy-up-amd64: ## Start AMD64 deployment container
 .PHONY: deploy-up-arm64
 deploy-up-arm64: ## Start ARM64 deployment container
 	@docker compose up -d deploy-arm64
+
+.PHONY: deploy-pull-arm64
+deploy-pull-arm64: ## Pull latest ARM64 deployment image and run in background
+	$(call print_info,"Pulling latest ARM64 deployment image...")
+	@docker pull $(REGISTRY)/$(IMAGE_NAME):$(TAG)-arm64
+	$(call print_info,"Starting ARM64 deployment container...")
+	@docker compose up -d deploy-arm64
+	$(call print_success,"ARM64 deployment container started")
+
+.PHONY: deploy-shell
+deploy-shell: ## Enter shell in ARM64 deployment container
+	@docker compose exec deploy-arm64 bash
 
 # Utility targets
 .PHONY: inspect
