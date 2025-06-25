@@ -35,7 +35,7 @@ class TaskLogicNode(Node):
     def __init__(self):
         super().__init__("task_logic_node")
         # Health check toggle parameter - default True for backward compatibility
-        self.declare_parameter('health_check_enabled', True)
+        self.declare_parameter('health_check_enabled', False)
 
         # Health monitoring parameters
         self.declare_parameter('topic_lidar', '/lidar_points')
@@ -76,6 +76,10 @@ class TaskLogicNode(Node):
         self.odom_sub = None
         self.sensor_health_timer = None
 
+        self.state = self.State.IDLE
+        self.text_data = None
+        self.latest_odom_msg = None
+
         # Conditionally create health monitoring subscriptions
         if self.health_check_enabled:
             self.point_cloud_sub = self.create_subscription(
@@ -88,13 +92,19 @@ class TaskLogicNode(Node):
                  UWB, self.get_parameter('topic_uwb').get_parameter_value().string_value, self.uwb_callback, 1, callback_group=self.odom_callback_group
             )
             self.get_logger().info("UWB subscriber node started (health check enabled)")
+            # Odom subscriber - store latest odom data without immediate processing
+            self.odom_sub = self.create_subscription(
+                Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.odom_callback, 1, callback_group=self.odom_callback_group
+            )
+            self.get_logger().info("Odom subscriber node started (health check enabled)")
+            # Add timer for monitoring sensor health including odometry
+            self.sensor_health_timer = self.create_timer(
+                10.0, self.check_sensor_health, #callback_group=self.timer_group
+            )
+            self.get_logger().info("Health monitoring timer started")
         else:
-            self.get_logger().info("Health check disabled - skipping sensor monitoring subscriptions")
+            self.get_logger().info("Health check disabled - skipping sensor/odom monitoring subscriptions")
 
-        # Text command subscriber for basic task logic
-        self.text_sub = self.create_subscription(
-            String, self.get_parameter('topic_text_command').get_parameter_value().string_value, self.text_callback, 1, callback_group=self.odom_callback_group
-        )
         self.get_logger().info("Text command subscriber node started")
 
         # ASR command subscriber
@@ -103,30 +113,6 @@ class TaskLogicNode(Node):
         )
         self.get_logger().info("ASR command subscriber node started")
 
-        self.state = self.State.IDLE
-        self.text_data = None
-        self.latest_odom_msg = None
-
-        # Conditionally create odometry subscriber for health monitoring
-        if self.health_check_enabled:
-            # Odom subscriber - store latest odom data without immediate processing
-            self.odom_sub = self.create_subscription(
-                Odometry, self.get_parameter('topic_odom').get_parameter_value().string_value, self.odom_callback, 1, callback_group=self.odom_callback_group
-            )
-            self.get_logger().info("Odom subscriber node started (health check enabled)")
-
-            # Add timer for monitoring sensor health including odometry
-            self.sensor_health_timer = self.create_timer(
-                10.0, self.check_sensor_health, #callback_group=self.timer_group
-            )
-            self.get_logger().info("Health monitoring timer started")
-        else:
-            self.get_logger().info("Health check disabled - skipping odometry monitoring and health timer")
-
-        # Log final health check status
-        self.get_logger().info(f"TaskLogicNode initialized with health_check_enabled={self.health_check_enabled}")
-        if not self.health_check_enabled:
-            self.get_logger().warn("HEALTH CHECK DISABLED: All ASR commands will be processed without safety validation")
 
 
     def destroy_node(self):
@@ -143,12 +129,6 @@ class TaskLogicNode(Node):
         if self.health_check_enabled:
             # TODO: we may need to change the api of the uwb to use sensor_processor.
             self.sensor_processor.process_uwb(uwb_msg)
-
-    def text_callback(self, text_msg):
-        """Callback for text commands from /test/command topic"""
-        if text_msg and text_msg.data:
-            self.text_data = text_msg.data
-            self.get_logger().info(f"Text command received: '{self.text_data}'")
 
     def asr_callback(self, asr_msg):
         """Callback for ASR commands - maps ASR commands to control commands and executes actions"""
