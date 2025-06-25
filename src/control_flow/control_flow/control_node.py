@@ -1,6 +1,7 @@
 import time
 import json
 from enum import Enum, auto
+import threading
 
 import rclpy
 from rclpy.node import Node
@@ -37,6 +38,9 @@ class TaskLogicNode(Node):
         # Health check toggle parameter - default True for backward compatibility
         self.declare_parameter('health_check_enabled', False)
 
+        # ASR Protection parameter - default False for backward compatibility
+        self.declare_parameter('asr_protection_enabled', False)
+
         # Health monitoring parameters
         self.declare_parameter('topic_lidar', '/lidar_points')
         self.declare_parameter('topic_uwb', '/uwb/data')
@@ -55,6 +59,9 @@ class TaskLogicNode(Node):
         # Get health check toggle state
         self.health_check_enabled = self.get_parameter('health_check_enabled').get_parameter_value().bool_value
 
+        # Get ASR protection toggle state
+        self.asr_protection_enabled = self.get_parameter('asr_protection_enabled').get_parameter_value().bool_value
+
         self.uwb_timeout = self.get_parameter('uwb_timeout').get_parameter_value().double_value
         self.pc_timeout = self.get_parameter('pc_timeout').get_parameter_value().double_value
         self.odom_timeout = self.get_parameter('odom_timeout').get_parameter_value().double_value
@@ -66,6 +73,14 @@ class TaskLogicNode(Node):
         distance_threshold = self.get_parameter('movement_distance_threshold').get_parameter_value().double_value
         self.action_executor = ActionExecutor(self)
         self.action_executor.set_distance_threshold(distance_threshold)
+
+        # ASR Protection buffering variables
+        self.asr_command_buffer = []  # List to maintain exact order and allow non-consecutive duplicates
+        self.asr_buffer_timer = None
+        self.asr_buffer_lock = threading.Lock()
+        self.last_asr_activity_time = None
+        self.asr_buffering_window = 1.0  # 1 second buffering window
+        self.asr_inactivity_threshold = 1.0  # 1 second inactivity threshold
 
         self.odom_callback_group = ReentrantCallbackGroup()
 
@@ -113,10 +128,21 @@ class TaskLogicNode(Node):
         )
         self.get_logger().info("ASR command subscriber node started")
 
+        # Log ASR protection status
+        if self.asr_protection_enabled:
+            self.get_logger().info(f"ASR Protection enabled - buffering window: {self.asr_buffering_window}s, inactivity threshold: {self.asr_inactivity_threshold}s")
+        else:
+            self.get_logger().info("ASR Protection disabled - commands will be processed immediately")
+
 
 
     def destroy_node(self):
         """Cleanup method with health check aware cleanup"""
+        # Clean up ASR buffer timer if it exists
+        if hasattr(self, 'asr_buffer_timer') and self.asr_buffer_timer is not None:
+            self.asr_buffer_timer.cancel()
+            self.get_logger().info("ASR buffer timer cancelled during cleanup")
+
         if self.health_check_enabled:
             self.get_logger().info("Destroying node with health check cleanup")
         else:
@@ -131,7 +157,7 @@ class TaskLogicNode(Node):
             self.sensor_processor.process_uwb(uwb_msg)
 
     def asr_callback(self, asr_msg):
-        """Callback for ASR commands - maps ASR commands to control commands and executes actions"""
+        """Callback for ASR commands - handles buffering and deduplication if ASR protection is enabled"""
         if asr_msg and asr_msg.data:
             asr_command = asr_msg.data.strip()
             self.get_logger().info(f"ASR command received: '{asr_command}'")
@@ -144,22 +170,83 @@ class TaskLogicNode(Node):
             else:
                 self.get_logger().debug(f"Health check disabled - processing ASR command without safety validation: '{asr_command}'")
 
-            # Use ASR processor to map the command
-            mapped_command = self.asr_processor.map_command(asr_command)
-
-            if mapped_command:
-                # Store the mapped command as text data for task logic
-                self.text_data = mapped_command
-                self.get_logger().info(f"ASR command mapped and stored: '{mapped_command}'")
-
-                # Execute the action using ActionExecutor
-                action_success = self.action_executor.execute_action(mapped_command)
-                if action_success:
-                    self.get_logger().info(f"Action executed successfully for command: '{mapped_command}'")
-                else:
-                    self.get_logger().warn(f"Action execution failed for command: '{mapped_command}'")
+            # Process command based on ASR protection setting
+            if self.asr_protection_enabled:
+                self._handle_asr_command_with_protection(asr_command)
             else:
-                self.get_logger().warn(f"ASR command could not be mapped: '{asr_command}'")
+                self._process_asr_command_immediately(asr_command)
+
+    def _handle_asr_command_with_protection(self, asr_command):
+        """Handle ASR command with buffering and consecutive duplicate removal"""
+        with self.asr_buffer_lock:
+            current_time = time.time()
+
+            # Check if this is the first command after inactivity
+            if (self.last_asr_activity_time is None or
+                current_time - self.last_asr_activity_time > self.asr_inactivity_threshold):
+
+                # Start buffering window
+                self.get_logger().info(f"Starting ASR buffering window - first command after inactivity: '{asr_command}'")
+                self._start_asr_buffering_window()
+
+            # Update last activity time
+            self.last_asr_activity_time = current_time
+
+            # Add command to buffer only if it's not the same as the last command (consecutive duplicate removal)
+            if not self.asr_command_buffer or self.asr_command_buffer[-1] != asr_command:
+                self.asr_command_buffer.append(asr_command)
+                self.get_logger().info(f"Added ASR command to buffer: '{asr_command}' (buffer size: {len(self.asr_command_buffer)})")
+            else:
+                self.get_logger().info(f"Consecutive duplicate ASR command ignored: '{asr_command}'")
+
+    def _start_asr_buffering_window(self):
+        """Start the ASR buffering window timer"""
+        # Cancel any existing timer
+        if self.asr_buffer_timer is not None:
+            self.asr_buffer_timer.cancel()
+
+        # Start new timer for buffering window
+        self.asr_buffer_timer = threading.Timer(self.asr_buffering_window, self._execute_buffered_asr_commands)
+        self.asr_buffer_timer.start()
+        self.get_logger().info(f"ASR buffering window started - will execute commands in {self.asr_buffering_window}s")
+
+    def _execute_buffered_asr_commands(self):
+        """Execute all buffered ASR commands sequentially"""
+        with self.asr_buffer_lock:
+            if not self.asr_command_buffer:
+                self.get_logger().info("ASR buffering window ended - no commands to execute")
+                return
+
+            commands_to_execute = self.asr_command_buffer.copy()
+            self.get_logger().info(f"ASR buffering window ended - executing {len(commands_to_execute)} commands: {commands_to_execute}")
+
+            # Clear the buffer
+            self.asr_command_buffer.clear()
+            self.asr_buffer_timer = None
+
+        # Execute commands sequentially (outside the lock to avoid blocking)
+        for command in commands_to_execute:
+            self.get_logger().info(f"Executing buffered ASR command: '{command}'")
+            self._process_asr_command_immediately(command)
+
+    def _process_asr_command_immediately(self, asr_command):
+        """Process ASR command immediately without buffering"""
+        # Use ASR processor to map the command
+        mapped_command = self.asr_processor.map_command(asr_command)
+
+        if mapped_command:
+            # Store the mapped command as text data for task logic
+            self.text_data = mapped_command
+            self.get_logger().info(f"ASR command mapped and stored: '{mapped_command}'")
+
+            # Execute the action using ActionExecutor
+            action_success = self.action_executor.execute_action(mapped_command)
+            if action_success:
+                self.get_logger().info(f"Action executed successfully for command: '{mapped_command}'")
+            else:
+                self.get_logger().warn(f"Action execution failed for command: '{mapped_command}'")
+        else:
+            self.get_logger().warn(f"ASR command could not be mapped: '{asr_command}'")
 
     def pc_callback(self, point_cloud_msg):
         # This callback processes point cloud data for health monitoring
@@ -307,6 +394,63 @@ class TaskLogicNode(Node):
                 self.get_logger().info("Health check disabled at runtime - ASR commands will bypass safety validation")
         else:
             self.get_logger().debug(f"Health check state unchanged: {enabled}")
+
+    def is_asr_protection_enabled(self):
+        """
+        Check if ASR protection is currently enabled.
+
+        Returns:
+            bool: True if ASR protection is enabled, False otherwise
+        """
+        return self.asr_protection_enabled
+
+    def set_asr_protection_enabled(self, enabled):
+        """
+        Enable or disable ASR protection at runtime.
+
+        Args:
+            enabled (bool): True to enable ASR protection, False to disable
+        """
+        old_state = self.asr_protection_enabled
+        self.asr_protection_enabled = enabled
+
+        if old_state != enabled:
+            if enabled:
+                self.get_logger().info("ASR Protection enabled at runtime - commands will be buffered and deduplicated")
+            else:
+                self.get_logger().info("ASR Protection disabled at runtime - commands will be processed immediately")
+                # Cancel any active buffering timer when disabling
+                with self.asr_buffer_lock:
+                    if self.asr_buffer_timer is not None:
+                        self.asr_buffer_timer.cancel()
+                        self.asr_buffer_timer = None
+                        self.get_logger().info("Active ASR buffering timer cancelled")
+                    # Clear any buffered commands
+                    if self.asr_command_buffer:
+                        cleared_count = len(self.asr_command_buffer)
+                        self.asr_command_buffer.clear()
+                        self.get_logger().info(f"Cleared {cleared_count} buffered ASR commands")
+        else:
+            self.get_logger().debug(f"ASR protection state unchanged: {enabled}")
+
+    def get_asr_protection_status(self):
+        """
+        Get comprehensive ASR protection status information.
+
+        Returns:
+            dict: Dictionary containing ASR protection status and related information
+        """
+        with self.asr_buffer_lock:
+            status = {
+                'asr_protection_enabled': self.asr_protection_enabled,
+                'buffering_window': self.asr_buffering_window,
+                'inactivity_threshold': self.asr_inactivity_threshold,
+                'buffer_active': self.asr_buffer_timer is not None,
+                'buffered_commands_count': len(self.asr_command_buffer),
+                'buffered_commands': self.asr_command_buffer.copy() if self.asr_command_buffer else [],
+                'last_activity_time': self.last_asr_activity_time
+            }
+        return status
 
 def main(args=None):
     rclpy.init(args=args)

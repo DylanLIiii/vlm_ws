@@ -116,3 +116,5 @@ node.set_health_check_enabled(False)
 - **Conditional Command Processing**: ASR commands blocked when sensors are unhealthy
 - **Graceful Degradation**: Odometry timeout warns but doesn't stop navigation
 - **Bypass Mode**: Health check can be disabled for testing/development
+
+
