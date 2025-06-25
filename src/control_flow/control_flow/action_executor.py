@@ -48,7 +48,7 @@ class ActionExecutor:
 
         # Create publishers for different command types
         self.joy_publisher = self.node.create_publisher(Joy, '/joy', 10)
-        self.following_publisher = self.node.create_publisher(String, '/following/task_type', 10)
+        self.following_publisher = self.node.create_publisher(String, '/following_control', 10)
 
         # Define command mappings for Joy messages
         self.joy_commands = {
