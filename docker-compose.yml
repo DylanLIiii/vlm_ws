@@ -75,7 +75,7 @@ services:
     network_mode: host
     volumes:
       - .:/vlm_ws
-      - /root/fastrtps_profile.xml:/root/fastrtps_profile.xml
+      - ${FASTRTPS_DEFAULT_PROFILES_FILE}:${FASTRTPS_DEFAULT_PROFILES_FILE}
     environment:
       - ROS_DISTRO=humble
       - DEBIAN_FRONTEND=noninteractive
