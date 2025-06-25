@@ -42,7 +42,7 @@ services:
         TARGETARCH: amd64
       platforms:
         - linux/amd64
-    image: ${REGISTRY:-192.168.31.199:8000}/vlm_ws:${TAG:-latest}-amd64
+    image: ${REGISTRY:-192.168.31.199:8000}/:${TAG:-latest}-amd64
     container_name: vlm_ws_deploy_amd64
     network_mode: host
     volumes:
@@ -70,7 +70,7 @@ services:
         TARGETARCH: arm64
       platforms:
         - linux/arm64
-    image: ${REGISTRY:-192.168.31.199:8000}/vlm_ws:${TAG:-latest}-arm64
+    image: ${REGISTRY:-192.168.31.199:8000}/algo/deploy_vlm:${TAG:-latest}-arm64
     container_name: vlm_ws_deploy_arm64
     network_mode: host
     volumes:
