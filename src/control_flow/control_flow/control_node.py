@@ -41,6 +41,9 @@ class TaskLogicNode(Node):
         # ASR Protection parameter - default False for backward compatibility
         self.declare_parameter('asr_protection_enabled', False)
 
+        # Multi-control parameter - default False for backward compatibility
+        self.declare_parameter('multi_control', False)
+
         # Health monitoring parameters
         self.declare_parameter('topic_lidar', '/lidar_points')
         self.declare_parameter('topic_uwb', '/uwb/data')
@@ -62,6 +65,9 @@ class TaskLogicNode(Node):
         # Get ASR protection toggle state
         self.asr_protection_enabled = self.get_parameter('asr_protection_enabled').get_parameter_value().bool_value
 
+        # Get multi-control toggle state
+        self.multi_control_enabled = self.get_parameter('multi_control').get_parameter_value().bool_value
+
         self.uwb_timeout = self.get_parameter('uwb_timeout').get_parameter_value().double_value
         self.pc_timeout = self.get_parameter('pc_timeout').get_parameter_value().double_value
         self.odom_timeout = self.get_parameter('odom_timeout').get_parameter_value().double_value
@@ -71,7 +77,7 @@ class TaskLogicNode(Node):
 
         # Get distance threshold parameter and pass to ActionExecutor
         distance_threshold = self.get_parameter('movement_distance_threshold').get_parameter_value().double_value
-        self.action_executor = ActionExecutor(self)
+        self.action_executor = ActionExecutor(self, multi_control_enabled=self.multi_control_enabled)
         self.action_executor.set_distance_threshold(distance_threshold)
 
         # ASR Protection buffering variables
@@ -133,6 +139,12 @@ class TaskLogicNode(Node):
             self.get_logger().info(f"ASR Protection enabled - buffering window: {self.asr_buffering_window}s, inactivity threshold: {self.asr_inactivity_threshold}s")
         else:
             self.get_logger().info("ASR Protection disabled - commands will be processed immediately")
+
+        # Log multi-control status
+        if self.multi_control_enabled:
+            self.get_logger().info("Multi-control enabled - following commands will be sent 10 times with 0.1s intervals")
+        else:
+            self.get_logger().info("Multi-control disabled - following commands will be sent once")
 
 
 
@@ -450,6 +462,52 @@ class TaskLogicNode(Node):
                 'buffered_commands': self.asr_command_buffer.copy() if self.asr_command_buffer else [],
                 'last_activity_time': self.last_asr_activity_time
             }
+        return status
+
+    def is_multi_control_enabled(self):
+        """
+        Check if multi-control is currently enabled.
+
+        Returns:
+            bool: True if multi-control is enabled, False otherwise
+        """
+        return self.multi_control_enabled
+
+    def set_multi_control_enabled(self, enabled):
+        """
+        Enable or disable multi-control at runtime.
+
+        Args:
+            enabled (bool): True to enable multi-control, False to disable
+        """
+        old_state = self.multi_control_enabled
+        self.multi_control_enabled = enabled
+
+        # Update the ActionExecutor's setting
+        self.action_executor.set_multi_control_enabled(enabled)
+
+        if old_state != enabled:
+            if enabled:
+                self.get_logger().info("Multi-control enabled at runtime - following commands will be sent 10 times with 0.1s intervals")
+            else:
+                self.get_logger().info("Multi-control disabled at runtime - following commands will be sent once")
+        else:
+            self.get_logger().debug(f"Multi-control state unchanged: {enabled}")
+
+    def get_multi_control_status(self):
+        """
+        Get comprehensive multi-control status information.
+
+        Returns:
+            dict: Dictionary containing multi-control status and related information
+        """
+        status = {
+            'multi_control_enabled': self.multi_control_enabled,
+            'action_executor_multi_control': self.action_executor.get_multi_control_enabled(),
+            'repeat_count': 10,
+            'interval_seconds': 0.1,
+            'total_duration_seconds': 1.0
+        }
         return status
 
 def main(args=None):

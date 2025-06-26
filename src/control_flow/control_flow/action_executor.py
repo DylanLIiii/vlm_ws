@@ -36,18 +36,23 @@ class ActionExecutor:
     specific interrupting actions (stand_up, shake_hand, stand_down).
     """
 
-    def __init__(self, node):
+    def __init__(self, node, multi_control_enabled=False):
         """
         Initialize the ActionExecutor.
 
         Args:
             node: ROS2 node instance for publishing and logging
+            multi_control_enabled (bool): Whether to enable multi-control mode for following commands
         """
         self.node = node
         self.logger = node.get_logger()
+        self.multi_control_enabled = multi_control_enabled
+
+        # Multi-control management
+        self.active_multi_control_timers = []  # List to track active timers for cancellation
 
         # Create publishers for different command types
-        self.joy_publisher = self.node.create_publisher(Joy, '/joy', 10)
+        self.joy_publisher = self.node.create_publisher(Joy, '/joy', 1)
         self.following_publisher = self.node.create_publisher(String, '/following_control', 10)
 
         # Define command mappings for Joy messages
@@ -177,6 +182,7 @@ class ActionExecutor:
         self.logger.info(f"Status monitored commands: {list(self.status_monitored_commands)}")
         self.logger.info(f"Timeout-based commands: {list(self.timeout_based_commands)}")
         self.logger.info(f"Task status monitoring enabled on /task_status topic")
+        self.logger.info(f"Multi-control mode: {'enabled' if self.multi_control_enabled else 'disabled'}")
 
     def execute_action(self, mapped_command):
         """
@@ -511,6 +517,7 @@ class ActionExecutor:
     def _publish_following_command(self, command):
         """
         Publish a String message for following commands.
+        When multi_control is enabled, publishes the command 10 times with 0.1s intervals.
 
         Args:
             command (str): The command to execute
@@ -527,14 +534,57 @@ class ActionExecutor:
             string_msg = String()
             string_msg.data = self.following_commands[command]
 
-            # Publish the message
-            self.following_publisher.publish(string_msg)
-            self.logger.info(f"Published following command for '{command}': '{string_msg.data}'")
-            return True
+            if self.multi_control_enabled:
+                # Multi-control mode: send command 10 times with 0.1s intervals
+                self._cancel_active_multi_control_timers()
+                self.logger.info(f"Multi-control mode: Publishing following command '{command}' 10 times with 0.1s intervals")
+
+                # Publish first command immediately
+                self.following_publisher.publish(string_msg)
+                self.logger.debug(f"Published following command (1/10) for '{command}': '{string_msg.data}'")
+
+                # Schedule remaining 9 commands with 0.1s intervals
+                for i in range(1, 10):
+                    timer = threading.Timer(i * 0.1, self._publish_single_following_command,
+                                          args=[string_msg, command, i + 1])
+                    self.active_multi_control_timers.append(timer)
+                    timer.start()
+
+                return True
+            else:
+                # Single command mode (original behavior)
+                self.following_publisher.publish(string_msg)
+                self.logger.info(f"Published following command for '{command}': '{string_msg.data}'")
+                return True
 
         except Exception as e:
             self.logger.error(f"Error publishing following command '{command}': {e}")
             return False
+
+    def _publish_single_following_command(self, string_msg, command, sequence_number):
+        """
+        Helper method to publish a single following command (used by multi-control timers).
+
+        Args:
+            string_msg (String): The ROS String message to publish
+            command (str): The original command name for logging
+            sequence_number (int): The sequence number of this command (for logging)
+        """
+        try:
+            self.following_publisher.publish(string_msg)
+            self.logger.debug(f"Published following command ({sequence_number}/10) for '{command}': '{string_msg.data}'")
+        except Exception as e:
+            self.logger.error(f"Error publishing following command ({sequence_number}/10) for '{command}': {e}")
+
+    def _cancel_active_multi_control_timers(self):
+        """
+        Cancel all active multi-control timers to prevent overlapping command sequences.
+        """
+        if self.active_multi_control_timers:
+            self.logger.debug(f"Cancelling {len(self.active_multi_control_timers)} active multi-control timers")
+            for timer in self.active_multi_control_timers:
+                timer.cancel()
+            self.active_multi_control_timers.clear()
 
     def enter_rl_mode(self):
         """
@@ -1073,3 +1123,30 @@ class ActionExecutor:
                         f"Current RL State: {self.current_rl_state.name}, "
                         f"Task State: {self.current_state.name}, "
                         f"Action: {action_taken}")
+
+    def set_multi_control_enabled(self, enabled):
+        """
+        Update the multi-control setting at runtime.
+
+        Args:
+            enabled (bool): Whether to enable multi-control mode
+        """
+        if isinstance(enabled, bool):
+            old_setting = self.multi_control_enabled
+            self.multi_control_enabled = enabled
+            self.logger.info(f"Multi-control setting updated: {old_setting} -> {enabled}")
+
+            # Cancel any active multi-control timers when disabling
+            if not enabled:
+                self._cancel_active_multi_control_timers()
+        else:
+            self.logger.error(f"Invalid multi-control setting type: {type(enabled)}. Must be boolean.")
+
+    def get_multi_control_enabled(self):
+        """
+        Get the current multi-control setting.
+
+        Returns:
+            bool: True if multi-control is enabled, False otherwise
+        """
+        return self.multi_control_enabled
