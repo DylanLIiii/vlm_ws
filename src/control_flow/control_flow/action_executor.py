@@ -292,13 +292,13 @@ class ActionExecutor:
 
         # Handle commands that require RL mode
         elif command in self.rl_mode_required_commands:
-            if self.current_rl_state != RLState.RL_MODE:
-                self.logger.info(f"Command '{command}' requires RL mode - transitioning from {self.current_rl_state.name} to RL_MODE")
+            if self.should_skip_rl_entry(command):
+                self.log_rl_state_transition(command, "Skipping RL entry - already in RL mode")
+                return self._transition_to_state(TaskState.EXECUTING_TASK)
+            else:
+                self.log_rl_state_transition(command, f"Entering RL mode from {self.current_rl_state.name}")
                 self.current_rl_state = RLState.RL_MODE
                 return self._transition_to_state(TaskState.RL_MODE)
-            else:
-                self.logger.info(f"Command '{command}' requires RL mode - already in RL mode, executing directly")
-                return self._transition_to_state(TaskState.EXECUTING_TASK)
 
         # Handle other commands (follow_stop, etc.)
         else:
@@ -450,8 +450,9 @@ class ActionExecutor:
         """Countdown callback for task completion that stays in RL mode."""
         self.active_countdown_thread = None  # Clear countdown reference
         if self.current_state == TaskState.EXECUTING_TASK:
-            self.logger.info("Task execution timeout reached - staying in RL mode")
-            self._transition_to_state(TaskState.RL_MODE)
+            self.logger.info("Task execution timeout reached - staying in RL mode, transitioning to idle")
+            # Maintain RL state but transition to idle (don't re-enter RL mode)
+            self._transition_to_state(TaskState.IDLE)
 
     def _on_task_complete_with_recovery(self):
         """Countdown callback for task completion that requires standing recovery."""
@@ -543,6 +544,25 @@ class ActionExecutor:
             bool: True if published successfully, False otherwise
         """
         return self._publish_joy_command('enter_rl_mode')
+
+    def exit_rl_mode(self, target_state=RLState.STANDING):
+        """
+        Explicitly exit RL mode and transition to a non-RL state.
+
+        Args:
+            target_state (RLState): The target non-RL state to transition to
+
+        Returns:
+            bool: True if state was changed, False otherwise
+        """
+        if self.current_rl_state == RLState.RL_MODE:
+            old_state = self.current_rl_state
+            self.current_rl_state = target_state
+            self.logger.info(f"Explicitly exiting RL mode: {old_state.name} -> {target_state.name}")
+            return True
+        else:
+            self.logger.info(f"Already in non-RL state: {self.current_rl_state.name}")
+            return False
 
     def _start_movement_command_tracking(self, command):
         """
@@ -755,8 +775,9 @@ class ActionExecutor:
 
                 # RL-based commands stay in RL mode after completion (no standing recovery)
                 if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
-                    self.logger.info(f"RL-based task '{completed_command}' completed - staying in RL mode")
-                    self._transition_to_state(TaskState.RL_MODE)
+                    self.logger.info(f"RL-based task '{completed_command}' completed - staying in RL mode, transitioning to idle")
+                    # Maintain RL state but transition to idle (don't re-enter RL mode)
+                    self._transition_to_state(TaskState.IDLE)
                 else:
                     self.logger.info(f"Movement task '{completed_command}' completed - transitioning to idle")
                     self._transition_to_state(TaskState.IDLE)
@@ -764,7 +785,8 @@ class ActionExecutor:
                 self.logger.warn(f"Failed to automatically stop following after completing movement task: '{completed_command}'")
                 # Even if stop following failed, still transition based on RL state
                 if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
-                    self._transition_to_state(TaskState.RL_MODE)
+                    # Maintain RL state but transition to idle (don't re-enter RL mode)
+                    self._transition_to_state(TaskState.IDLE)
                 else:
                     self._transition_to_state(TaskState.IDLE)
 
@@ -796,8 +818,9 @@ class ActionExecutor:
 
             # Follow commands stay in RL mode after completion (persistent RL state management)
             if completed_command in self.rl_commands_stay_in_rl and self.current_state == TaskState.EXECUTING_TASK:
-                self.logger.info(f"Follow task '{completed_command}' completed - staying in RL mode")
-                self._transition_to_state(TaskState.RL_MODE)
+                self.logger.info(f"Follow task '{completed_command}' completed - staying in RL mode, transitioning to idle")
+                # Maintain RL state but transition to idle (don't re-enter RL mode)
+                self._transition_to_state(TaskState.IDLE)
             else:
                 self.logger.info(f"Follow task '{completed_command}' completed - transitioning to idle")
                 self._transition_to_state(TaskState.IDLE)
@@ -1021,5 +1044,32 @@ class ActionExecutor:
             'active_movement_command': self.active_movement_command,
             'active_follow_command': self.active_follow_command,
             'queued_commands_count': len(self.task_queue),
-            'state_duration': self.get_state_duration()
+            'state_duration': self.get_state_duration(),
+            'persistent_rl_active': self.current_rl_state == RLState.RL_MODE and self.current_state == TaskState.IDLE
         }
+
+    def should_skip_rl_entry(self, command):
+        """
+        Determine if RL mode entry should be skipped for a command.
+
+        Args:
+            command (str): The command to check
+
+        Returns:
+            bool: True if RL entry should be skipped, False otherwise
+        """
+        return (command in self.rl_mode_required_commands and
+                self.current_rl_state == RLState.RL_MODE)
+
+    def log_rl_state_transition(self, command, action_taken):
+        """
+        Log RL state transitions for debugging and monitoring.
+
+        Args:
+            command (str): The command being processed
+            action_taken (str): Description of the action taken
+        """
+        self.logger.info(f"RL State Management - Command: '{command}', "
+                        f"Current RL State: {self.current_rl_state.name}, "
+                        f"Task State: {self.current_state.name}, "
+                        f"Action: {action_taken}")
